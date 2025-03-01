@@ -5,7 +5,7 @@ require('dotenv').config();
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const CHANNEL_ID = '@ClipsCloud';
 const CHANNEL_LINK = 'https://t.me/ClipsCloud';
-const ADMIN_IDS = [process.env.ADMIN_ID, process.env.ADMIN_ID_2, process.env.ADMIN_ID_3];
+const ADMIN_IDS = [process.env.ADMIN_ID, process.env.ADMIN_ID_2, process.env.ADMIN_ID_3,process.env.ADMIN_ID_4];
 const USERS_FILE = 'users.json';
 const VIDEOS_FILE = 'videos.json';
 const GROUP_ID = '-4602723399';
