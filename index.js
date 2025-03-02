@@ -13,7 +13,7 @@ const USER_IDS_FILE = 'userid.json';
 const PREMIUM_USERS_FILE = 'premiumusers.json';
 const GROUP_ID = '-4602723399';
 const QR_CODE_IMAGE = 'qr_code_50.jpg';
-const DAILY_VIDEO_LIMIT = 50;
+const DAILY_VIDEO_LIMIT = 25;
 
 let users = {};
 let videos = [];
@@ -181,14 +181,15 @@ bot.action('check_membership', async (ctx) => {
 
 bot.action('get_videos', async (ctx) => {
     const userId = ctx.from.id;
-    if (!users[userId]) {
-        users[userId] = { id: userId, name: ctx.from.username || ctx.from.first_name, videosSentToday: 0, receivedVideos: [], isPremium: false, banned: false };
-        if (!userIds.includes(userId)) {
-            userIds.push(userId);
-        }
+    let user = users[userId];
+
+    // Initialize user if not present
+    if (!user) {
+        user = { id: userId, name: ctx.from.username || ctx.from.first_name, videosSentToday: 0, receivedVideos: [], isPremium: false, banned: false };
+        users[userId] = user;
+        userIds.push(userId);
         saveData();
     }
-    const user = users[userId];
 
     if (user.banned) {
         await ctx.reply('🚫 You are banned from using this bot.');
@@ -197,9 +198,7 @@ bot.action('get_videos', async (ctx) => {
 
     if (user.videosSentToday >= DAILY_VIDEO_LIMIT && !user.isPremium) {
         const reply = await ctx.reply('❌ You’ve reached your daily limit of 50 videos. Need more? Subscribe below:',
-            Markup.inlineKeyboard([
-                [Markup.button.callback('💳 Subscribe for More', 'subscribe')]
-            ])
+            Markup.inlineKeyboard([[Markup.button.callback('💳 Subscribe for More', 'subscribe')]])
         );
         deleteAfterDelay(ctx.chat.id, reply.message_id);
         return;
@@ -216,10 +215,12 @@ bot.action('get_videos', async (ctx) => {
 
     for (const video of newVideos) {
         try {
+            console.log(`Sending video ID: ${video} to user ID: ${userId}`);
             const msg = await ctx.telegram.sendVideo(userId, video);
+            console.log(`Successfully sent video ${video}`);
             deleteAfterDelay(userId, msg.message_id);
         } catch (error) {
-            console.error(`Failed to send video to user ${userId}:`, error.message);
+            console.error(`Failed to send video ${video} to user ${userId}:`, error.message);
         }
     }
 
@@ -227,7 +228,7 @@ bot.action('get_videos', async (ctx) => {
     user.receivedVideos.push(...newVideos);
     saveData();
 
-    const reply = await ctx.reply('These videos will be deleted in 5 minute. so please save or forward to saved',
+    const reply = await ctx.reply('These videos will be deleted in 5 minutes. Please save or forward them to your saved messages.',
         Markup.inlineKeyboard([[Markup.button.callback('🔄 Get More', 'get_videos')]])
     );
     deleteAfterDelay(ctx.chat.id, reply.message_id);
@@ -246,7 +247,6 @@ bot.action('subscribe', async (ctx) => {
 
 bot.on('photo', async (ctx) => {
     const userId = ctx.from.id;
-    const userName = ctx.from.username || ctx.from.first_name;
     const user = users[userId];
 
     if (user && user.waitingForPaymentProof) {
@@ -260,10 +260,10 @@ bot.on('photo', async (ctx) => {
             GROUP_ID,
             photo,
             {
-                caption: `Payment proof from user: ${userName} (ID: ${userId})`,
+                caption: `Payment proof from user: ${user.username || user.name} (ID: ${userId})`,
                 reply_markup: Markup.inlineKeyboard([
-                    [Markup.button.callback('✅ Verify Payment', `verify_payment:${userId}`)]
-                ]).reply_markup
+                    [Markup.button.callback(`✅ Verify Payment`, `verify_payment:${userId}`)]
+                ])
             }
         );
 
@@ -304,14 +304,11 @@ bot.on('video', async (ctx) => {
         videos.push(fileId);
         saveData();
 
-        const reply = await ctx.reply('🎉 Video added to the database!');
-        const videoMessage = await ctx.telegram.sendVideo(GROUP_ID, fileId);
-
-        deleteAfterDelay(ctx.chat.id, reply.message_id);
-        deleteAfterDelay(GROUP_ID, videoMessage.message_id);
+        console.log(`Added video to database: ${fileId}`); // Log added video
+        await ctx.reply('🎉 Video added to the database!');
     } else {
-        const reply = await ctx.reply('⚠️ This video is already in the database.');
-        deleteAfterDelay(ctx.chat.id, reply.message_id);
+        console.log(`Video already exists in the database: ${fileId}`);
+        await ctx.reply('⚠️ This video is already in the database.');
     }
 });
 
@@ -448,8 +445,8 @@ bot.action('admin_remove_premium', async (ctx) => {
     const reply = await ctx.reply('Enter the user ID to remove premium status:');
     deleteAfterDelay(ctx.chat.id, reply.message_id);
 
-    bot.on('text', async (ctx) => {
-        const userId = ctx.message.text;
+    bot.on('text', async (replyCtx) => {
+        const userId = replyCtx.message.text;
         if (users[userId]) {
             removePremium(userId);
             await ctx.reply(`✅ Premium status removed for user: ${users[userId].name}`);
@@ -465,8 +462,8 @@ bot.action('admin_ban_users', async (ctx) => {
     const reply = await ctx.reply('Enter the user ID to ban:');
     deleteAfterDelay(ctx.chat.id, reply.message_id);
 
-    bot.on('text', async (ctx) => {
-        const userId = ctx.message.text;
+    bot.on('text', async (replyCtx) => {
+        const userId = replyCtx.message.text;
         if (users[userId]) {
             banUser(userId);
             await ctx.reply(`✅ User ${users[userId].name} has been banned.`);
