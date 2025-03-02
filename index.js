@@ -12,7 +12,7 @@ const PENDING_REQUESTS_FILE = 'pendingrqst.json';
 const USER_IDS_FILE = 'userid.json';
 const PREMIUM_USERS_FILE = 'premiumusers.json';
 const GROUP_ID = '-4602723399';
-const QR_CODE_IMAGE = 'qr_code_50.jpg';
+const QR_CODE_IMAGE = 'qr_code_5.jpg';
 const DAILY_VIDEO_LIMIT = 25;
 
 let users = {};
