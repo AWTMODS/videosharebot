@@ -197,7 +197,7 @@ bot.action('get_videos', async (ctx) => {
     }
 
     if (user.videosSentToday >= DAILY_VIDEO_LIMIT && !user.isPremium) {
-        const reply = await ctx.reply('❌ You’ve reached your daily limit of 50 videos. Need more? Subscribe below:',
+        const reply = await ctx.reply('❌ You’ve reached your daily limit of 25 videos. Need more? Subscribe below:',
             Markup.inlineKeyboard([[Markup.button.callback('💳 Subscribe for More', 'subscribe')]])
         );
         deleteAfterDelay(ctx.chat.id, reply.message_id);
@@ -228,7 +228,7 @@ bot.action('get_videos', async (ctx) => {
     user.receivedVideos.push(...newVideos);
     saveData();
 
-    const reply = await ctx.reply('These videos will be deleted in 5 minutes. Please save or forward them to your saved messages.',
+    const reply = await ctx.reply('These videos will be deleted in 5 minutes. Please save or forward them to your saved messages.if you facing any issues contact @aadithcv',
         Markup.inlineKeyboard([[Markup.button.callback('🔄 Get More', 'get_videos')]])
     );
     deleteAfterDelay(ctx.chat.id, reply.message_id);
@@ -241,7 +241,7 @@ bot.action('subscribe', async (ctx) => {
     users[userId].waitingForPaymentProof = true;
     saveData();
 
-    const reply = await ctx.replyWithPhoto({ source: QR_CODE_IMAGE }, { caption: '💳 Scan this QR code to make a payment of 50rs. After payment, send your proof of payment here.' });
+    const reply = await ctx.replyWithPhoto({ source: QR_CODE_IMAGE }, { caption: '💳 Scan this QR code to make a payment of 5rs. After payment, send your proof of payment here.' });
     deleteAfterDelay(ctx.chat.id, reply.message_id);
 });
 
