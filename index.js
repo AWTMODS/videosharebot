@@ -175,7 +175,7 @@ bot.action('get_videos', async (ctx) => {
         user.videoIndex = 0; // Reset video index for the day
     }
 
-    if (user.videoCount >= 10 && !user.premium) {
+    if (user.videoCount >= 30 && !user.premium) {
         ctx.reply(
             'You have reached your daily limit. Purchase premium to continue.',
             Markup.inlineKeyboard([[Markup.button.callback('Purchase Premium', 'purchase_premium')]])
@@ -269,7 +269,7 @@ bot.action('purchase_premium', async (ctx) => {
 
 // Handle "Verify" button in admin group
 bot.action(/verify_(\d+)/, async (ctx) => {
-    const userId = parseInt(ctx.match[1], 10);
+    const userId = parseInt(ctx.match[1], 30);
     const user = users.find((u) => u.id === userId);
 
     if (user) {
