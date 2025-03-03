@@ -11,7 +11,7 @@ const VIDEOS_FILE = 'videos.json';
 const PENDING_REQUESTS_FILE = 'pendingrqst.json';
 const USER_IDS_FILE = 'userid.json';
 const PREMIUM_USERS_FILE = 'premiumusers.json';
-const GROUP_ID = '-4602723399';
+const GROUP_ID = '-1002446731306';
 const QR_CODE_IMAGE = 'qr_code_5.jpg';
 const DAILY_VIDEO_LIMIT = 25;
 
