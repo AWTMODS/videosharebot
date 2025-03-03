@@ -1,476 +1,347 @@
+require('dotenv').config(); // Load environment variables from .env
 const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs');
-require('dotenv').config();
+const path = require('path');
+const cron = require('node-cron');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
-const CHANNEL_ID = '@ClipsCloud';
-const CHANNEL_LINK = 'https://t.me/ClipsCloud';
-const ADMIN_IDS = [process.env.ADMIN_ID, process.env.ADMIN_ID_2, process.env.ADMIN_ID_3];
-const USERS_FILE = 'users.json';
-const VIDEOS_FILE = 'videos.json';
-const PENDING_REQUESTS_FILE = 'pendingrqst.json';
-const USER_IDS_FILE = 'userid.json';
-const PREMIUM_USERS_FILE = 'premiumusers.json';
-const GROUP_ID = '-1002446731306';
-const QR_CODE_IMAGE = 'qr_code_5.jpg';
-const DAILY_VIDEO_LIMIT = 25;
-
-let users = {};
-let videos = [];
-let pendingRequests = [];
-let userIds = [];
-let premiumUsers = [];
-
-// Load data from files
-const loadData = () => {
-    if (fs.existsSync(USERS_FILE)) {
-        try {
-            users = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-        } catch (error) {
-            console.error('Failed to parse users.json:', error.message);
-        }
+// Function to load or create JSON files
+function loadOrCreateJSON(filePath, defaultValue = []) {
+    if (!fs.existsSync(filePath)) {
+        fs.writeFileSync(filePath, JSON.stringify(defaultValue, null, 2));
+        console.log(`Created ${filePath} with default value:`, defaultValue);
     }
-    if (fs.existsSync(VIDEOS_FILE)) {
-        try {
-            videos = JSON.parse(fs.readFileSync(VIDEOS_FILE, 'utf8'));
-        } catch (error) {
-            console.error('Failed to parse videos.json:', error.message);
-        }
-    }
-    if (fs.existsSync(PENDING_REQUESTS_FILE)) {
-        try {
-            pendingRequests = JSON.parse(fs.readFileSync(PENDING_REQUESTS_FILE, 'utf8'));
-        } catch (error) {
-            console.error('Failed to parse pendingrqst.json:', error.message);
-        }
-    }
-    if (fs.existsSync(USER_IDS_FILE)) {
-        try {
-            userIds = JSON.parse(fs.readFileSync(USER_IDS_FILE, 'utf8'));
-        } catch (error) {
-            console.error('Failed to parse userid.json:', error.message);
-        }
-    }
-    if (fs.existsSync(PREMIUM_USERS_FILE)) {
-        try {
-            premiumUsers = JSON.parse(fs.readFileSync(PREMIUM_USERS_FILE, 'utf8'));
-        } catch (error) {
-            console.error('Failed to parse premiumusers.json:', error.message);
-        }
-    }
-};
+    return JSON.parse(fs.readFileSync(filePath));
+}
 
-// Save data to files
-const saveData = () => {
-    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-    fs.writeFileSync(VIDEOS_FILE, JSON.stringify(videos, null, 2));
-    fs.writeFileSync(PENDING_REQUESTS_FILE, JSON.stringify(pendingRequests, null, 2));
-    fs.writeFileSync(USER_IDS_FILE, JSON.stringify(userIds, null, 2));
-    fs.writeFileSync(PREMIUM_USERS_FILE, JSON.stringify(premiumUsers, null, 2));
-};
+// Define paths for JSON files
+const usersFilePath = path.join(__dirname, 'users.json');
+const videosFilePath = path.join(__dirname, 'videos.json');
+const adminsFilePath = path.join(__dirname, 'admins.json');
+const usersIdFilePath = path.join(__dirname, 'usersid.json'); // New file for user IDs
 
-// Initialize data
-loadData();
+// Load or create JSON files
+let users = loadOrCreateJSON(usersFilePath);
+let videos = loadOrCreateJSON(videosFilePath);
+let usersId = loadOrCreateJSON(usersIdFilePath, []); // Load or create usersid.json
+const admins = process.env.ADMIN_IDS.split(',').map(Number); // Load admin IDs from .env
 
-const checkMembership = async (userId) => {
+const BOT_TOKEN = process.env.BOT_TOKEN; // Load bot token from .env
+const CHANNEL_USERNAME = '@clipscloud'; // Replace with your channel username
+const ADMIN_GROUP_ID = -1002446731306; // Load admin channel ID from .env
+
+const bot = new Telegraf(BOT_TOKEN);
+
+// Save JSON files
+function saveUsers() {
+    fs.writeFileSync(usersFilePath, JSON.stringify(users, null, 2));
+}
+
+function saveVideos() {
+    fs.writeFileSync(videosFilePath, JSON.stringify(videos, null, 2));
+}
+
+// Function to update usersid.json and send it to the admin channel
+function updateUsersIdAndSendToAdmin(userId) {
+    // Add the new user ID if it doesn't already exist
+    if (!usersId.includes(userId)) {
+        usersId.push(userId);
+        fs.writeFileSync(usersIdFilePath, JSON.stringify(usersId, null, 2));
+        console.log(`Updated usersid.json with new user ID: ${userId}`);
+
+        // Send the updated usersid.json to the admin channel
+        bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: usersIdFilePath })
+            .then(() => console.log('Sent usersid.json to admin channel'))
+            .catch((err) => console.error('Failed to send usersid.json to admin channel:', err));
+    }
+}
+
+// Handle video uploads from admins
+bot.on('video', async (ctx) => {
+    const userId = ctx.from.id;
+
+    // Check if the user is an admin
+    if (!admins.includes(userId)) {
+        ctx.reply('You are not authorized to upload videos.');
+        return;
+    }
+
+    // Get the video file ID
+    const videoFileId = ctx.message.video.file_id;
+
+    // Save the video file ID to videos.json
+    videos.push({ fileId: videoFileId });
+    saveVideos();
+
+    ctx.reply('Video uploaded successfully!');
+});
+
+// Check if user is in the channel
+async function checkUserInChannel(userId) {
     try {
-        const chatMember = await bot.telegram.getChatMember(CHANNEL_ID, userId);
-        return ['member', 'administrator', 'creator'].includes(chatMember.status);
-    } catch (error) {
-        console.error('Error checking membership:', error.message);
+        const member = await bot.telegram.getChatMember(CHANNEL_USERNAME, userId);
+        return member.status !== 'left';
+    } catch (err) {
+        console.error('Error checking channel membership:', err);
         return false;
     }
-};
+}
 
-const requireMembership = (handler) => async (ctx) => {
-    const userId = ctx.from.id;
-    if (await checkMembership(userId)) {
-        return handler(ctx);
-    } else {
-        await ctx.reply('🚨 You need to join our Telegram channel to use this bot:',
-            Markup.inlineKeyboard([
-                [Markup.button.url('🔗 Join Channel', CHANNEL_LINK)],
-                [Markup.button.callback('✅ I Have Joined', 'check_membership')]
-            ])
-        );
-    }
-};
-
-const deleteAfterDelay = async (chatId, messageId, delay = 300000) => {
-    setTimeout(async () => {
-        try {
-            await bot.telegram.deleteMessage(chatId, messageId);
-        } catch (error) {
-            console.error(`Failed to delete message ${messageId}:`, error.message);
-        }
-    }, delay);
-};
-
-// Ban a user
-const banUser = (userId) => {
-    if (users[userId]) {
-        users[userId].banned = true;
-        saveData();
-    }
-};
-
-// Unban a user
-const unbanUser = (userId) => {
-    if (users[userId]) {
-        users[userId].banned = false;
-        saveData();
-    }
-};
-
-// Remove premium status from a user
-const removePremium = (userId) => {
-    if (users[userId]) {
-        users[userId].isPremium = false;
-        premiumUsers = premiumUsers.filter(id => id !== userId);
-        saveData();
-    }
-};
-
-// Add premium status to a user
-const addPremium = (userId) => {
-    if (users[userId]) {
-        users[userId].isPremium = true;
-        if (!premiumUsers.includes(userId)) {
-            premiumUsers.push(userId);
-        }
-        saveData();
-    }
-};
-
-bot.start(requireMembership(async (ctx) => {
-    const userId = ctx.from.id;
-    const userName = ctx.from.username || ctx.from.first_name;
-
-    if (!users[userId]) {
-        users[userId] = { id: userId, name: userName, videosSentToday: 0, receivedVideos: [], isPremium: false, banned: false };
-        if (!userIds.includes(userId)) {
-            userIds.push(userId);
-        }
-        saveData();
-        await ctx.telegram.sendMessage(GROUP_ID, `New user started the bot: ${userName} (ID: ${userId})`);
-    }
-
-    if (users[userId].banned) {
-        await ctx.reply('🚫 You are banned from using this bot.');
-        return;
-    }
-
-    const reply = await ctx.reply('🎉 Welcome! Click below to get videos:',
-        Markup.inlineKeyboard([[Markup.button.callback('📽 Get Videos', 'get_videos')]])
-    );
-
-    deleteAfterDelay(ctx.chat.id, reply.message_id);
-}));
-
-bot.action('check_membership', async (ctx) => {
-    const userId = ctx.from.id;
-
-    if (await checkMembership(userId)) {
-        const reply = await ctx.reply('✅ Thank you for joining! You can now use the bot by sending /start');
-        deleteAfterDelay(ctx.chat.id, reply.message_id);
-    } else {
-        const reply = await ctx.reply('❌ It seems you haven’t joined yet. Please join the channel and try again.');
-        deleteAfterDelay(ctx.chat.id, reply.message_id);
-    }
-});
-
-bot.action('get_videos', async (ctx) => {
-    const userId = ctx.from.id;
-    let user = users[userId];
-
-    // Initialize user if not present
-    if (!user) {
-        user = { id: userId, name: ctx.from.username || ctx.from.first_name, videosSentToday: 0, receivedVideos: [], isPremium: false, banned: false };
-        users[userId] = user;
-        userIds.push(userId);
-        saveData();
-    }
-
-    if (user.banned) {
-        await ctx.reply('🚫 You are banned from using this bot.');
-        return;
-    }
-
-    if (user.videosSentToday >= DAILY_VIDEO_LIMIT && !user.isPremium) {
-        const reply = await ctx.reply('❌ You’ve reached your daily limit of 25 videos. Need more? Subscribe below:',
-            Markup.inlineKeyboard([[Markup.button.callback('💳 Subscribe for More', 'subscribe')]])
-        );
-        deleteAfterDelay(ctx.chat.id, reply.message_id);
-        return;
-    }
-
-    const availableVideos = videos.filter(v => !user.receivedVideos.includes(v));
-    const newVideos = availableVideos.slice(0, 10);
-
-    if (newVideos.length === 0) {
-        const reply = await ctx.reply('No new videos available.');
-        deleteAfterDelay(ctx.chat.id, reply.message_id);
-        return;
-    }
-
-    for (const video of newVideos) {
-        try {
-            console.log(`Sending video ID: ${video} to user ID: ${userId}`);
-            const msg = await ctx.telegram.sendVideo(userId, video);
-            console.log(`Successfully sent video ${video}`);
-            deleteAfterDelay(userId, msg.message_id);
-        } catch (error) {
-            console.error(`Failed to send video ${video} to user ${userId}:`, error.message);
-        }
-    }
-
-    user.videosSentToday += newVideos.length;
-    user.receivedVideos.push(...newVideos);
-    saveData();
-
-    const reply = await ctx.reply('These videos will be deleted in 5 minutes. Please save or forward them to your saved messages.if you facing any issues contact @aadithcv',
-        Markup.inlineKeyboard([[Markup.button.callback('🔄 Get More', 'get_videos')]])
-    );
-    deleteAfterDelay(ctx.chat.id, reply.message_id);
-});
-
-bot.action('subscribe', async (ctx) => {
-    const userId = ctx.from.id;
-    const userName = ctx.from.username || ctx.from.first_name;
-
-    users[userId].waitingForPaymentProof = true;
-    saveData();
-
-    const reply = await ctx.replyWithPhoto({ source: QR_CODE_IMAGE }, { caption: '💳 Scan this QR code to make a payment of 5rs. After payment, send your proof of payment here.' });
-    deleteAfterDelay(ctx.chat.id, reply.message_id);
-});
-
-bot.on('photo', async (ctx) => {
-    const userId = ctx.from.id;
-    const user = users[userId];
-
-    if (user && user.waitingForPaymentProof) {
-        const photo = ctx.message.photo[0].file_id;
-
-        // Save payment proof in pendingRequests
-        pendingRequests.push({ userId, photo });
-        saveData();
-
-        const adminMessage = await ctx.telegram.sendPhoto(
-            GROUP_ID,
-            photo,
-            {
-                caption: `Payment proof from user: ${user.username || user.name} (ID: ${userId})`,
-                reply_markup: Markup.inlineKeyboard([
-                    [Markup.button.callback(`✅ Verify Payment`, `verify_payment:${userId}`)]
-                ])
-            }
-        );
-
-        const userReply = await ctx.reply('✅ Your payment proof has been sent for verification. Please wait for confirmation.');
-        deleteAfterDelay(ctx.chat.id, userReply.message_id);
-        deleteAfterDelay(GROUP_ID, adminMessage.message_id);
-
-        user.waitingForPaymentProof = false;
-        saveData();
-    }
-});
-
-bot.action(/verify_payment:(\d+)/, async (ctx) => {
-    const userId = ctx.match[1];
-    const user = users[userId];
-
-    if (user) {
-        addPremium(userId);
-        pendingRequests = pendingRequests.filter(request => request.userId !== userId);
-        saveData();
-
-        const adminReply = await ctx.telegram.sendMessage(GROUP_ID, `✅ Payment verified for user: ${user.name} (ID: ${userId}). Daily limit removed.`);
-        const userReply = await ctx.telegram.sendMessage(userId, '🎉 Your payment has been verified! You now have unlimited access to videos.');
-
-        deleteAfterDelay(GROUP_ID, adminReply.message_id);
-        deleteAfterDelay(userId, userReply.message_id);
-    } else {
-        const reply = await ctx.reply('❌ User not found.');
-        deleteAfterDelay(ctx.chat.id, reply.message_id);
-    }
-});
-
-bot.on('video', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
-
-    const fileId = ctx.message.video.file_id;
-    if (!videos.includes(fileId)) {
-        videos.push(fileId);
-        saveData();
-
-        console.log(`Added video to database: ${fileId}`); // Log added video
-        await ctx.reply('🎉 Video added to the database!');
-    } else {
-        console.log(`Video already exists in the database: ${fileId}`);
-        await ctx.reply('⚠️ This video is already in the database.');
-    }
-});
-
-bot.command('data', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
-
-    try {
-        await ctx.telegram.sendDocument(ctx.chat.id, { source: USERS_FILE });
-        await ctx.telegram.sendDocument(ctx.chat.id, { source: VIDEOS_FILE });
-        await ctx.telegram.sendDocument(ctx.chat.id, { source: PENDING_REQUESTS_FILE });
-        await ctx.telegram.sendDocument(ctx.chat.id, { source: USER_IDS_FILE });
-        await ctx.telegram.sendDocument(ctx.chat.id, { source: PREMIUM_USERS_FILE });
-    } catch (error) {
-        console.error('Error sending data:', error);
-        const reply = await ctx.reply('❌ Failed to send data files.');
-        deleteAfterDelay(ctx.chat.id, reply.message_id);
-    }
-});
-
-bot.command('broadcast', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
-
-    const text = ctx.message.text.split(' ').slice(1).join(' ');
-
-    if (!text && !ctx.message.video) {
-        const reply = await ctx.reply('⚠️ Please provide a message or video to broadcast.');
-        deleteAfterDelay(ctx.chat.id, reply.message_id);
-        return;
-    }
-
-    for (const userId of userIds) {
-        try {
-            if (text) {
-                const msg = await bot.telegram.sendMessage(userId, text);
-                deleteAfterDelay(userId, msg.message_id);
-            } else if (ctx.message.video) {
-                const msg = await bot.telegram.sendVideo(userId, ctx.message.video.file_id);
-                deleteAfterDelay(userId, msg.message_id);
-            }
-        } catch (error) {
-            console.error(`Failed to send to ${userId}:`, error);
-        }
-    }
-
-    const reply = await ctx.reply('📢 Broadcast sent successfully!');
-    deleteAfterDelay(ctx.chat.id, reply.message_id);
-});
-
-bot.command('admin', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
-
-    const reply = await ctx.reply('Admin Commands:',
+// Welcome message with buttons
+function sendWelcomeMessage(ctx) {
+    ctx.reply(
+        'Welcome to the bot! Please join our channel to continue.',
         Markup.inlineKeyboard([
-            [Markup.button.callback('📢 Broadcast', 'admin_broadcast')],
-            [Markup.button.callback('👥 Total Users', 'admin_total_users')],
-            [Markup.button.callback('🎥 Total Videos', 'admin_total_videos')],
-            [Markup.button.callback('📂 Data', 'admin_data')],
-            [Markup.button.callback('🕒 Pending Verification', 'admin_pending_verification')],
-            [Markup.button.callback('🌟 Premium Users', 'admin_premium_users')],
-            [Markup.button.callback('🚫 Remove Premium', 'admin_remove_premium')],
-            [Markup.button.callback('🔨 Ban Users', 'admin_ban_users')]
+            [Markup.button.url('Join Channel', `https://t.me/${CHANNEL_USERNAME.slice(1)}`)],
+            [Markup.button.callback('I Have Joined', 'check_join')],
         ])
     );
+}
 
-    deleteAfterDelay(ctx.chat.id, reply.message_id);
+// Handle /start command
+bot.command('start', async (ctx) => {
+    const userId = ctx.from.id;
+    const user = users.find((u) => u.id === userId);
+
+    if (!user) {
+        // Initialize user with default values
+        users.push({
+            id: userId,
+            username: ctx.from.username || '',
+            name: ctx.from.first_name || '',
+            joined: false,
+            premium: false,
+            videoCount: 0, // Initialize videoCount
+            lastVideoDate: null,
+            videoIndex: 0, // Initialize videoIndex
+            welcomed: false // Initialize welcomed
+        });
+        saveUsers();
+
+        // Update usersid.json and send it to the admin channel
+        updateUsersIdAndSendToAdmin(userId);
+    }
+
+    sendWelcomeMessage(ctx);
 });
 
-bot.action('admin_broadcast', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
+// Handle "I Have Joined" button
+bot.action('check_join', async (ctx) => {
+    const userId = ctx.from.id;
+    const isMember = await checkUserInChannel(userId);
 
-    const reply = await ctx.reply('Enter the message or video to broadcast:');
-    deleteAfterDelay(ctx.chat.id, reply.message_id);
-});
+    if (isMember) {
+        const user = users.find((u) => u.id === userId);
+        user.joined = true;
+        saveUsers();
 
-bot.action('admin_total_users', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
+        ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // Remove buttons
+        ctx.reply('Welcome! You can now use the bot.');
 
-    const totalUsers = userIds.length;
-    const reply = await ctx.reply(`Total Users: ${totalUsers}`);
-    deleteAfterDelay(ctx.chat.id, reply.message_id);
-});
+        if (!user.welcomed) {
+            const welcomeMessage = await ctx.reply('This is your first time using the bot. Enjoy!');
+            user.welcomed = true;
+            saveUsers();
 
-bot.action('admin_total_videos', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
+            // Delete welcome message after 30 seconds
+            setTimeout(() => ctx.deleteMessage(welcomeMessage.message_id), 30000);
+        }
 
-    const totalVideos = videos.length;
-    const reply = await ctx.reply(`Total Videos: ${totalVideos}`);
-    deleteAfterDelay(ctx.chat.id, reply.message_id);
-});
-
-bot.action('admin_data', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
-
-    try {
-        await ctx.telegram.sendDocument(ctx.chat.id, { source: USERS_FILE });
-        await ctx.telegram.sendDocument(ctx.chat.id, { source: VIDEOS_FILE });
-        await ctx.telegram.sendDocument(ctx.chat.id, { source: PENDING_REQUESTS_FILE });
-        await ctx.telegram.sendDocument(ctx.chat.id, { source: USER_IDS_FILE });
-        await ctx.telegram.sendDocument(ctx.chat.id, { source: PREMIUM_USERS_FILE });
-    } catch (error) {
-        console.error('Error sending data:', error);
-        const reply = await ctx.reply('❌ Failed to send data files.');
-        deleteAfterDelay(ctx.chat.id, reply.message_id);
+        ctx.reply(
+            'Click below to get videos:',
+            Markup.inlineKeyboard([[Markup.button.callback('Get Videos', 'get_videos')]])
+        );
+    } else {
+        ctx.answerCbQuery('You have not joined the channel yet. Please join and try again.');
     }
 });
 
-bot.action('admin_pending_verification', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
+// Handle "Get Videos" button
+bot.action('get_videos', async (ctx) => {
+    const userId = ctx.from.id;
+    const user = users.find((u) => u.id === userId);
 
-    if (pendingRequests.length === 0) {
-        const reply = await ctx.reply('No pending verification requests.');
-        deleteAfterDelay(ctx.chat.id, reply.message_id);
+    // Ensure videoCount and videoIndex are initialized
+    if (user.videoCount === null || user.videoCount === undefined) {
+        user.videoCount = 0;
+    }
+    if (user.videoIndex === null || user.videoIndex === undefined) {
+        user.videoIndex = 0;
+    }
+
+    const today = new Date().toDateString();
+    if (user.lastVideoDate !== today) {
+        user.lastVideoDate = today;
+        user.videoCount = 0;
+        user.videoIndex = 0; // Reset video index for the day
+    }
+
+    if (user.videoCount >= 10 && !user.premium) {
+        ctx.reply(
+            'You have reached your daily limit. Purchase premium to continue.',
+            Markup.inlineKeyboard([[Markup.button.callback('Purchase Premium', 'purchase_premium')]])
+        );
         return;
     }
 
-    for (const request of pendingRequests) {
-        await ctx.telegram.sendPhoto(ctx.chat.id, request.photo, {
-            caption: `User ID: ${request.userId}`,
-        });
+    if (videos.length === 0) {
+        ctx.reply('No videos available.');
+        return;
+    }
+
+    // Calculate the number of videos to send (maximum 5)
+    const remainingVideos = videos.length - user.videoIndex;
+    const videosToSendCount = Math.min(5, remainingVideos); // Send up to 5 videos
+
+    if (videosToSendCount <= 0) {
+        ctx.reply('No more videos available.');
+        return;
+    }
+
+    // Send the videos
+    const videosToSend = videos.slice(user.videoIndex, user.videoIndex + videosToSendCount);
+    for (const video of videosToSend) {
+        await ctx.replyWithVideo(video.fileId);
+    }
+
+    // Update user's video index and count
+    user.videoIndex += videosToSendCount;
+    user.videoCount += videosToSendCount;
+    saveUsers();
+
+    // Show "Get Videos" button again if there are more videos
+    if (user.videoIndex < videos.length) {
+        ctx.reply(
+            'Click below to get more videos:',
+            Markup.inlineKeyboard([[Markup.button.callback('Get Videos', 'get_videos')]])
+        );
+    } else {
+        ctx.reply('You have reached the end of the video list.');
     }
 });
 
-bot.action('admin_premium_users', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
+// Handle "Purchase Premium" button
+bot.action('purchase_premium', async (ctx) => {
+    const userId = ctx.from.id;
 
-    const premiumUserNames = premiumUsers.map(id => users[id].name).join(', ');
-    const reply = await ctx.reply(`Premium Users: ${premiumUserNames}`);
-    deleteAfterDelay(ctx.chat.id, reply.message_id);
+    console.log(`[INFO] User ${userId} clicked "Purchase Premium"`);
+
+    // Send QR code image from server
+    await ctx.replyWithPhoto({ source: './qr_code.jpg' }, {
+        caption: 'Please send the payment proof after completing the payment.',
+    });
+
+    const paymentProofHandler = async (ctx) => {
+        try {
+            if (ctx.from.id === userId && ctx.message.photo) {
+                const proof = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+                console.log('[INFO] Payment proof file ID:', proof);
+
+                const user = ctx.from;
+                const adminMessage = `💳 *Payment Proof Received*\n👤 *Name:* ${user.first_name}\n🆔 *User ID:* ${user.id}\n👥 *Username:* @${user.username || 'N/A'}\n🔗 [Open Profile](https://t.me/${user.username || user.id})`;
+
+                await bot.telegram.sendPhoto(ADMIN_GROUP_ID, proof, {
+                    caption: adminMessage,
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        inline_keyboard: [[{ text: 'Verify', callback_data: `verify_${userId}` }]],
+                    },
+                });
+
+                console.log('[SUCCESS] Payment proof sent to admin group');
+                await ctx.reply('Payment proof received. Admins will verify it shortly.');
+
+                ctx.telegram.off('message', paymentProofHandler); // Fix: Use ctx.telegram.off
+            }
+        } catch (err) {
+            console.error('[ERROR] Failed to process payment proof:', err);
+
+        }
+    };
+
+    bot.on('message', paymentProofHandler);
+
+    setTimeout(() => {
+        console.log('[INFO] Payment proof listener timed out');
+        ctx.telegram.off('message', paymentProofHandler); // Fix: Use ctx.telegram.off
+        ctx.reply('Payment proof submission timed out. Please try again if needed.');
+    }, 300000); // 5 minutes timeout
 });
 
-bot.action('admin_remove_premium', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
+// Handle "Verify" button in admin group
+bot.action(/verify_(\d+)/, async (ctx) => {
+    const userId = parseInt(ctx.match[1], 10);
+    const user = users.find((u) => u.id === userId);
 
-    const reply = await ctx.reply('Enter the user ID to remove premium status:');
-    deleteAfterDelay(ctx.chat.id, reply.message_id);
+    if (user) {
+        user.premium = true;
+        saveUsers();
 
-    bot.on('text', async (replyCtx) => {
-        const userId = replyCtx.message.text;
-        if (users[userId]) {
-            removePremium(userId);
-            await ctx.reply(`✅ Premium status removed for user: ${users[userId].name}`);
-        } else {
-            await ctx.reply('❌ User not found.');
+        await ctx.reply('Payment verified. User is now premium.');
+        await bot.telegram.sendMessage(userId, 'Thank you for purchasing premium!');
+    } else {
+        await ctx.reply('User not found in the database.');
+    }
+});
+
+
+// Admin commands
+bot.command('admin', (ctx) => {
+    const userId = ctx.from.id;
+    if (!admins.includes(userId)) {
+        ctx.reply('You are not an admin.');
+        return;
+    }
+
+    ctx.reply(
+        'Admin Panel',
+        Markup.inlineKeyboard([
+            [Markup.button.callback('Total Users', 'total_users')],
+            [Markup.button.callback('Total Videos', 'total_videos')],
+            [Markup.button.callback('Broadcast', 'broadcast')],
+            [Markup.button.callback('Data', 'data')],
+            [Markup.button.callback('Premium Users', 'premium_users')],
+        ])
+    );
+});
+
+// Handle admin buttons
+bot.action('total_users', (ctx) => ctx.reply(`Total Users: ${users.length}`));
+bot.action('total_videos', (ctx) => ctx.reply(`Total Videos: ${videos.length}`));
+bot.action('premium_users', (ctx) => {
+    const premiumUsers = users.filter((u) => u.premium);
+    ctx.reply(`Premium Users: ${premiumUsers.length}`);
+});
+
+// Broadcast function
+bot.action('broadcast', (ctx) => {
+    ctx.reply('Send the message, video, or photo you want to broadcast.');
+    bot.on('message', async (msg) => {
+        if (admins.includes(msg.from.id)) {
+            for (const user of users) {
+                try {
+                    if (msg.photo) {
+                        await bot.telegram.sendPhoto(user.id, msg.photo[0].file_id, { caption: msg.caption });
+                    } else if (msg.video) {
+                        await bot.telegram.sendVideo(user.id, msg.video.file_id, { caption: msg.caption });
+                    } else {
+                        await bot.telegram.sendMessage(user.id, msg.text);
+                    }
+                } catch (err) {
+                    console.error(`Failed to send message to user ${user.id}:`, err);
+                }
+            }
+            ctx.reply('Broadcast completed.');
         }
     });
 });
 
-bot.action('admin_ban_users', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
-
-    const reply = await ctx.reply('Enter the user ID to ban:');
-    deleteAfterDelay(ctx.chat.id, reply.message_id);
-
-    bot.on('text', async (replyCtx) => {
-        const userId = replyCtx.message.text;
-        if (users[userId]) {
-            banUser(userId);
-            await ctx.reply(`✅ User ${users[userId].name} has been banned.`);
-        } else {
-            await ctx.reply('❌ User not found.');
-        }
-    });
+// Send JSON files to admin channel every 15 minutes
+cron.schedule('*/15 * * * *', () => {
+    bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: usersFilePath });
+    bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: videosFilePath });
+    bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: usersIdFilePath });
 });
 
+// Start the bot
 bot.launch();
+console.log('Bot is running...');
