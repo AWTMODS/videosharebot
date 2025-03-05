@@ -4,6 +4,17 @@ const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
 
+// Function to log errors to a file
+function logError(error) {
+    const errorLogPath = path.join(__dirname, 'error.log');
+    const timestamp = new Date().toISOString();
+    const errorMessage = `[${timestamp}] ${error.stack || error}\n`;
+
+    // Append the error to the error log file
+    fs.appendFileSync(errorLogPath, errorMessage);
+    console.error('Error logged:', errorMessage);
+}
+
 // Function to load or create JSON files
 function loadOrCreateJSON(filePath, defaultValue = []) {
     if (!fs.existsSync(filePath)) {
@@ -51,7 +62,7 @@ function updateUsersIdAndSendToAdmin(userId) {
         // Send the updated usersid.json to the admin channel
         bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: usersIdFilePath })
             .then(() => console.log('Sent usersid.json to admin channel'))
-            .catch((err) => console.error('Failed to send usersid.json to admin channel:', err));
+            .catch((err) => logError(err)); // Log the error
     }
 }
 
@@ -65,14 +76,19 @@ bot.on('video', async (ctx) => {
         return;
     }
 
-    // Get the video file ID
-    const videoFileId = ctx.message.video.file_id;
+    try {
+        // Get the video file ID
+        const videoFileId = ctx.message.video.file_id;
 
-    // Save the video file ID to videos.json
-    videos.push({ fileId: videoFileId });
-    saveVideos();
+        // Save the video file ID to videos.json
+        videos.push({ fileId: videoFileId });
+        saveVideos();
 
-    ctx.reply('Video uploaded successfully!');
+        ctx.reply('Video uploaded successfully!');
+    } catch (err) {
+        logError(err); // Log the error
+        ctx.reply('An error occurred while uploading the video.');
+    }
 });
 
 // Check if user is in the channel
@@ -81,7 +97,7 @@ async function checkUserInChannel(userId) {
         const member = await bot.telegram.getChatMember(CHANNEL_USERNAME, userId);
         return member.status !== 'left';
     } catch (err) {
-        console.error('Error checking channel membership:', err);
+        logError(err); // Log the error
         return false;
     }
 }
@@ -160,62 +176,67 @@ bot.action('get_videos', async (ctx) => {
     const userId = ctx.from.id;
     const user = users.find((u) => u.id === userId);
 
-    // Ensure videoCount and videoIndex are initialized
-    if (user.videoCount === null || user.videoCount === undefined) {
-        user.videoCount = 0;
-    }
-    if (user.videoIndex === null || user.videoIndex === undefined) {
-        user.videoIndex = 0;
-    }
+    try {
+        // Ensure videoCount and videoIndex are initialized
+        if (user.videoCount === null || user.videoCount === undefined) {
+            user.videoCount = 0;
+        }
+        if (user.videoIndex === null || user.videoIndex === undefined) {
+            user.videoIndex = 0;
+        }
 
-    const today = new Date().toDateString();
-    if (user.lastVideoDate !== today) {
-        user.lastVideoDate = today;
-        user.videoCount = 0;
-        user.videoIndex = 0; // Reset video index for the day
-    }
+        const today = new Date().toDateString();
+        if (user.lastVideoDate !== today) {
+            user.lastVideoDate = today;
+            user.videoCount = 0;
+            user.videoIndex = 0; // Reset video index for the day
+        }
 
-    if (user.videoCount >= 30 && !user.premium) {
-        ctx.reply(
-            'You have reached your daily limit. Purchase premium to continue.',
-            Markup.inlineKeyboard([[Markup.button.callback('Purchase Premium', 'purchase_premium')]])
-        );
-        return;
-    }
+        if (user.videoCount >= 20 && !user.premium) {
+            ctx.reply(
+                'You have reached your daily limit. Purchase premium to continue.',
+                Markup.inlineKeyboard([[Markup.button.callback('Purchase Premium', 'purchase_premium')]])
+            );
+            return;
+        }
 
-    if (videos.length === 0) {
-        ctx.reply('No videos available.');
-        return;
-    }
+        if (videos.length === 0) {
+            ctx.reply('No videos available.');
+            return;
+        }
 
-    // Calculate the number of videos to send (maximum 5)
-    const remainingVideos = videos.length - user.videoIndex;
-    const videosToSendCount = Math.min(5, remainingVideos); // Send up to 5 videos
+        // Calculate the number of videos to send (maximum 5)
+        const remainingVideos = videos.length - user.videoIndex;
+        const videosToSendCount = Math.min(5, remainingVideos); // Send up to 5 videos
 
-    if (videosToSendCount <= 0) {
-        ctx.reply('No more videos available.');
-        return;
-    }
+        if (videosToSendCount <= 0) {
+            ctx.reply('No more videos available.');
+            return;
+        }
 
-    // Send the videos
-    const videosToSend = videos.slice(user.videoIndex, user.videoIndex + videosToSendCount);
-    for (const video of videosToSend) {
-        await ctx.replyWithVideo(video.fileId);
-    }
+        // Send the videos
+        const videosToSend = videos.slice(user.videoIndex, user.videoIndex + videosToSendCount);
+        for (const video of videosToSend) {
+            await ctx.replyWithVideo(video.fileId);
+        }
 
-    // Update user's video index and count
-    user.videoIndex += videosToSendCount;
-    user.videoCount += videosToSendCount;
-    saveUsers();
+        // Update user's video index and count
+        user.videoIndex += videosToSendCount;
+        user.videoCount += videosToSendCount;
+        saveUsers();
 
-    // Show "Get Videos" button again if there are more videos
-    if (user.videoIndex < videos.length) {
-        ctx.reply(
-            'Click below to get more videos:',
-            Markup.inlineKeyboard([[Markup.button.callback('Get Videos', 'get_videos')]])
-        );
-    } else {
-        ctx.reply('You have reached the end of the video list.');
+        // Show "Get Videos" button again if there are more videos
+        if (user.videoIndex < videos.length) {
+            ctx.reply(
+                'Click below to get more videos:',
+                Markup.inlineKeyboard([[Markup.button.callback('Get Videos', 'get_videos')]])
+            );
+        } else {
+            ctx.reply('You have reached the end of the video list.');
+        }
+    } catch (err) {
+        logError(err); // Log the error
+        ctx.reply('An error occurred while fetching videos.');
     }
 });
 
@@ -225,51 +246,56 @@ bot.action('purchase_premium', async (ctx) => {
 
     console.log(`[INFO] User ${userId} clicked "Purchase Premium"`);
 
-    // Send QR code image from server
-    await ctx.replyWithPhoto({ source: './qr_code.jpg' }, {
-        caption: 'Please send the payment proof after completing the payment.',
-    });
+    try {
+        // Send QR code image from server
+        await ctx.replyWithPhoto({ source: './qr_code.jpg' }, {
+            caption: 'Please send the payment proof after completing the payment.',
+        });
 
-    const paymentProofHandler = async (ctx) => {
-        try {
-            if (ctx.from.id === userId && ctx.message.photo) {
-                const proof = ctx.message.photo[ctx.message.photo.length - 1].file_id;
-                console.log('[INFO] Payment proof file ID:', proof);
+        const paymentProofHandler = async (ctx) => {
+            try {
+                if (ctx.from.id === userId && ctx.message.photo) {
+                    const proof = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+                    console.log('[INFO] Payment proof file ID:', proof);
 
-                const user = ctx.from;
-                const adminMessage = `💳 *Payment Proof Received*\n👤 *Name:* ${user.first_name}\n🆔 *User ID:* ${user.id}\n👥 *Username:* @${user.username || 'N/A'}\n🔗 [Open Profile](https://t.me/${user.username || user.id})`;
+                    const user = ctx.from;
+                    const adminMessage = `💳 *Payment Proof Received*\n👤 *Name:* ${user.first_name}\n🆔 *User ID:* ${user.id}\n👥 *Username:* @${user.username || 'N/A'}\n🔗 [Open Profile](https://t.me/${user.username || user.id})`;
 
-                await bot.telegram.sendPhoto(ADMIN_GROUP_ID, proof, {
-                    caption: adminMessage,
-                    parse_mode: 'Markdown',
-                    reply_markup: {
-                        inline_keyboard: [[{ text: 'Verify', callback_data: `verify_${userId}` }]],
-                    },
-                });
+                    await bot.telegram.sendPhoto(ADMIN_GROUP_ID, proof, {
+                        caption: adminMessage,
+                        parse_mode: 'Markdown',
+                        reply_markup: {
+                            inline_keyboard: [[{ text: 'Verify', callback_data: `verify_${userId}` }]],
+                        },
+                    });
 
-                console.log('[SUCCESS] Payment proof sent to admin group');
-                await ctx.reply('Payment proof received. Admins will verify it shortly.');
+                    console.log('[SUCCESS] Payment proof sent to admin group');
+                    await ctx.reply('Payment proof received. Admins will verify it shortly.');
 
-                ctx.telegram.off('message', paymentProofHandler); // Fix: Use ctx.telegram.off
+                    ctx.telegram.off('message', paymentProofHandler); // Fix: Use ctx.telegram.off
+                }
+            } catch (err) {
+                logError(err); // Log the error
+                await ctx.reply('An error occurred while processing the payment proof.');
             }
-        } catch (err) {
-            console.error('[ERROR] Failed to process payment proof:', err);
+        };
 
-        }
-    };
+        bot.on('message', paymentProofHandler);
 
-    bot.on('message', paymentProofHandler);
-
-    setTimeout(() => {
-        console.log('[INFO] Payment proof listener timed out');
-        ctx.telegram.off('message', paymentProofHandler); // Fix: Use ctx.telegram.off
-        ctx.reply('Payment proof submission timed out. Please try again if needed.');
-    }, 300000); // 5 minutes timeout
+        setTimeout(() => {
+            console.log('[INFO] Payment proof listener timed out');
+            ctx.telegram.off('message', paymentProofHandler); // Fix: Use ctx.telegram.off
+            ctx.reply('Payment proof submission timed out. Please try again if needed.');
+        }, 300000); // 5 minutes timeout
+    } catch (err) {
+        logError(err); // Log the error
+       // ctx.reply('An error occurred while processing your request.');
+    }
 });
 
 // Handle "Verify" button in admin group
 bot.action(/verify_(\d+)/, async (ctx) => {
-    const userId = parseInt(ctx.match[1], 30);
+    const userId = parseInt(ctx.match[1], 20);
     const user = users.find((u) => u.id === userId);
 
     if (user) {
@@ -282,7 +308,6 @@ bot.action(/verify_(\d+)/, async (ctx) => {
         await ctx.reply('User not found in the database.');
     }
 });
-
 
 // Admin commands
 bot.command('admin', (ctx) => {
@@ -327,7 +352,7 @@ bot.action('broadcast', (ctx) => {
                         await bot.telegram.sendMessage(user.id, msg.text);
                     }
                 } catch (err) {
-                    console.error(`Failed to send message to user ${user.id}:`, err);
+                    logError(err); // Log the error
                 }
             }
             ctx.reply('Broadcast completed.');
@@ -337,9 +362,13 @@ bot.action('broadcast', (ctx) => {
 
 // Send JSON files to admin channel every 15 minutes
 cron.schedule('*/15 * * * *', () => {
-    bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: usersFilePath });
-    bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: videosFilePath });
-    bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: usersIdFilePath });
+    try {
+        bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: usersFilePath });
+        bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: videosFilePath });
+        bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: usersIdFilePath });
+    } catch (err) {
+        logError(err); // Log the error
+    }
 });
 
 // Start the bot
