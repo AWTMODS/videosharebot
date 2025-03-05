@@ -146,7 +146,25 @@ bot.action('check_join', async (ctx) => {
     const isMember = await checkUserInChannel(userId);
 
     if (isMember) {
-        const user = users.find((u) => u.id === userId);
+        let user = users.find((u) => u.id === userId);
+
+        // If the user doesn't exist, initialize them with default values
+        if (!user) {
+            user = {
+                id: userId,
+                username: ctx.from.username || '',
+                name: ctx.from.first_name || '',
+                joined: false,
+                premium: false,
+                videoCount: 0,
+                lastVideoDate: null,
+                videoIndex: 0,
+                welcomed: false
+            };
+            users.push(user);
+            saveUsers();
+        }
+
         user.joined = true;
         saveUsers();
 
@@ -276,7 +294,7 @@ bot.action('purchase_premium', async (ctx) => {
                 }
             } catch (err) {
                 logError(err); // Log the error
-                await ctx.reply('An error occurred while processing the payment proof.');
+               // await ctx.reply('An error occurred while processing the payment proof.');
             }
         };
 
@@ -289,7 +307,7 @@ bot.action('purchase_premium', async (ctx) => {
         }, 300000); // 5 minutes timeout
     } catch (err) {
         logError(err); // Log the error
-       // ctx.reply('An error occurred while processing your request.');
+        ctx.reply('An error occurred while processing your request.');
     }
 });
 
