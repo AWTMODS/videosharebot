@@ -1,95 +1,83 @@
 require('dotenv').config(); // Load environment variables from .env
 const { Telegraf, Markup } = require('telegraf');
-const fs = require('fs');
-const path = require('path');
+const { MongoClient } = require('mongodb');
 const cron = require('node-cron');
 
-// Function to log errors to a file
-function logError(error) {
-    const errorLogPath = path.join(__dirname, 'error.log');
-    const timestamp = new Date().toISOString();
-    const errorMessage = `[${timestamp}] ${error.stack || error}\n`;
+// MongoDB connection URL
+const mongoUrl = 'mongodb+srv://awtwhatsappcrashlog:hmTx4nNaxAeA9VNU@cluster0.qgmoc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+const dbName = 'telegram_bot'; // Replace with your database name
+let db;
 
-    // Append the error to the error log file
-    fs.appendFileSync(errorLogPath, errorMessage);
+// Connect to MongoDB
+async function connectToMongoDB() {
+    try {
+        const client = new MongoClient(mongoUrl);
+        await client.connect();
+        db = client.db(dbName);
+        console.log('Connected to MongoDB');
+    } catch (err) {
+        console.error('Failed to connect to MongoDB:', err);
+        process.exit(1); // Exit if MongoDB connection fails
+    }
+}
+
+// Function to log errors to MongoDB
+async function logError(error) {
+    const errorsCollection = db.collection('errors');
+    const timestamp = new Date().toISOString();
+    const errorMessage = `[${timestamp}] ${error.stack || error}`;
+
+    await errorsCollection.insertOne({ timestamp, error: errorMessage });
     console.error('Error logged:', errorMessage);
 }
 
-// Function to load or create JSON files
-function loadOrCreateJSON(filePath, defaultValue = []) {
-    if (!fs.existsSync(filePath)) {
-        fs.writeFileSync(filePath, JSON.stringify(defaultValue, null, 2));
-        console.log(`Created ${filePath} with default value:`, defaultValue);
-    }
-    return JSON.parse(fs.readFileSync(filePath));
+// Save user data to MongoDB
+async function saveUser(user) {
+    const usersCollection = db.collection('users');
+    await usersCollection.updateOne({ id: user.id }, { $set: user }, { upsert: true });
 }
 
-// Define paths for JSON files
-const usersFilePath = path.join(__dirname, 'users.json');
-const videosFilePath = path.join(__dirname, 'videos.json');
-const adminsFilePath = path.join(__dirname, 'admins.json');
-const usersIdFilePath = path.join(__dirname, 'usersid.json'); // New file for user IDs
+// Load all users from MongoDB
+async function loadUsers() {
+    const usersCollection = db.collection('users');
+    return await usersCollection.find({}).toArray();
+}
 
-// Load or create JSON files
-let users = loadOrCreateJSON(usersFilePath);
-let videos = loadOrCreateJSON(videosFilePath);
-let usersId = loadOrCreateJSON(usersIdFilePath, []); // Load or create usersid.json
-const admins = process.env.ADMIN_IDS.split(',').map(Number); // Load admin IDs from .env
+// Save video data to MongoDB
+async function saveVideo(video) {
+    const videosCollection = db.collection('videos');
+    await videosCollection.insertOne(video);
+}
+
+// Load all videos from MongoDB
+async function loadVideos() {
+    const videosCollection = db.collection('videos');
+    return await videosCollection.find({}).toArray();
+}
+
+// Save user ID to MongoDB
+async function saveUserId(userId) {
+    const usersIdCollection = db.collection('usersId');
+    await usersIdCollection.updateOne({ userId }, { $set: { userId } }, { upsert: true });
+}
+
+// Load all user IDs from MongoDB
+async function loadUserIds() {
+    const usersIdCollection = db.collection('usersId');
+    return await usersIdCollection.find({}).toArray();
+}
+
+// Call the connection function
+connectToMongoDB();
+
+// Load admin IDs from .env
+const admins = process.env.ADMIN_IDS.split(',').map(Number);
 
 const BOT_TOKEN = process.env.BOT_TOKEN; // Load bot token from .env
 const CHANNEL_USERNAME = '@clipscloud'; // Replace with your channel username
 const ADMIN_GROUP_ID = -1002446731306; // Load admin channel ID from .env
 
 const bot = new Telegraf(BOT_TOKEN);
-
-// Save JSON files
-function saveUsers() {
-    fs.writeFileSync(usersFilePath, JSON.stringify(users, null, 2));
-}
-
-function saveVideos() {
-    fs.writeFileSync(videosFilePath, JSON.stringify(videos, null, 2));
-}
-
-// Function to update usersid.json and send it to the admin channel
-function updateUsersIdAndSendToAdmin(userId) {
-    // Add the new user ID if it doesn't already exist
-    if (!usersId.includes(userId)) {
-        usersId.push(userId);
-        fs.writeFileSync(usersIdFilePath, JSON.stringify(usersId, null, 2));
-        console.log(`Updated usersid.json with new user ID: ${userId}`);
-
-        // Send the updated usersid.json to the admin channel
-        bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: usersIdFilePath })
-            .then(() => console.log('Sent usersid.json to admin channel'))
-            .catch((err) => logError(err)); // Log the error
-    }
-}
-
-// Handle video uploads from admins
-bot.on('video', async (ctx) => {
-    const userId = ctx.from.id;
-
-    // Check if the user is an admin
-    if (!admins.includes(userId)) {
-        ctx.reply('You are not authorized to upload videos.');
-        return;
-    }
-
-    try {
-        // Get the video file ID
-        const videoFileId = ctx.message.video.file_id;
-
-        // Save the video file ID to videos.json
-        videos.push({ fileId: videoFileId });
-        saveVideos();
-
-        ctx.reply('Video uploaded successfully!');
-    } catch (err) {
-        logError(err); // Log the error
-        ctx.reply('An error occurred while uploading the video.');
-    }
-});
 
 // Check if user is in the channel
 async function checkUserInChannel(userId) {
@@ -116,25 +104,26 @@ function sendWelcomeMessage(ctx) {
 // Handle /start command
 bot.command('start', async (ctx) => {
     const userId = ctx.from.id;
-    const user = users.find((u) => u.id === userId);
+    const usersCollection = db.collection('users');
+    const user = await usersCollection.findOne({ id: userId });
 
     if (!user) {
         // Initialize user with default values
-        users.push({
+        const newUser = {
             id: userId,
             username: ctx.from.username || '',
             name: ctx.from.first_name || '',
             joined: false,
             premium: false,
-            videoCount: 0, // Initialize videoCount
+            videoCount: 0,
             lastVideoDate: null,
-            videoIndex: 0, // Initialize videoIndex
-            welcomed: false // Initialize welcomed
-        });
-        saveUsers();
+            videoIndex: 0,
+            welcomed: false,
+        };
+        await usersCollection.insertOne(newUser);
 
-        // Update usersid.json and send it to the admin channel
-        updateUsersIdAndSendToAdmin(userId);
+        // Save user ID to usersId collection
+        await saveUserId(userId);
     }
 
     sendWelcomeMessage(ctx);
@@ -146,7 +135,8 @@ bot.action('check_join', async (ctx) => {
     const isMember = await checkUserInChannel(userId);
 
     if (isMember) {
-        let user = users.find((u) => u.id === userId);
+        const usersCollection = db.collection('users');
+        let user = await usersCollection.findOne({ id: userId });
 
         // If the user doesn't exist, initialize them with default values
         if (!user) {
@@ -159,14 +149,13 @@ bot.action('check_join', async (ctx) => {
                 videoCount: 0,
                 lastVideoDate: null,
                 videoIndex: 0,
-                welcomed: false
+                welcomed: false,
             };
-            users.push(user);
-            saveUsers();
+            await usersCollection.insertOne(user);
         }
 
         user.joined = true;
-        saveUsers();
+        await saveUser(user);
 
         ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // Remove buttons
         ctx.reply('Welcome! You can now use the bot.');
@@ -174,7 +163,7 @@ bot.action('check_join', async (ctx) => {
         if (!user.welcomed) {
             const welcomeMessage = await ctx.reply('This is your first time using the bot. Enjoy!');
             user.welcomed = true;
-            saveUsers();
+            await saveUser(user);
 
             // Delete welcome message after 30 seconds
             setTimeout(() => ctx.deleteMessage(welcomeMessage.message_id), 30000);
@@ -192,7 +181,8 @@ bot.action('check_join', async (ctx) => {
 // Handle "Get Videos" button
 bot.action('get_videos', async (ctx) => {
     const userId = ctx.from.id;
-    const user = users.find((u) => u.id === userId);
+    const usersCollection = db.collection('users');
+    const user = await usersCollection.findOne({ id: userId });
 
     try {
         // Ensure videoCount and videoIndex are initialized
@@ -218,6 +208,7 @@ bot.action('get_videos', async (ctx) => {
             return;
         }
 
+        const videos = await loadVideos();
         if (videos.length === 0) {
             ctx.reply('No videos available.');
             return;
@@ -241,7 +232,7 @@ bot.action('get_videos', async (ctx) => {
         // Update user's video index and count
         user.videoIndex += videosToSendCount;
         user.videoCount += videosToSendCount;
-        saveUsers();
+        await saveUser(user);
 
         // Show "Get Videos" button again if there are more videos
         if (user.videoIndex < videos.length) {
@@ -294,7 +285,6 @@ bot.action('purchase_premium', async (ctx) => {
                 }
             } catch (err) {
                 logError(err); // Log the error
-               // await ctx.reply('An error occurred while processing the payment proof.');
             }
         };
 
@@ -313,12 +303,13 @@ bot.action('purchase_premium', async (ctx) => {
 
 // Handle "Verify" button in admin group
 bot.action(/verify_(\d+)/, async (ctx) => {
-    const userId = parseInt(ctx.match[1], 20);
-    const user = users.find((u) => u.id === userId);
+    const userId = parseInt(ctx.match[1], 10);
+    const usersCollection = db.collection('users');
+    const user = await usersCollection.findOne({ id: userId });
 
     if (user) {
         user.premium = true;
-        saveUsers();
+        await saveUser(user);
 
         await ctx.reply('Payment verified. User is now premium.');
         await bot.telegram.sendMessage(userId, 'Thank you for purchasing premium!');
@@ -348,11 +339,22 @@ bot.command('admin', (ctx) => {
 });
 
 // Handle admin buttons
-bot.action('total_users', (ctx) => ctx.reply(`Total Users: ${users.length}`));
-bot.action('total_videos', (ctx) => ctx.reply(`Total Videos: ${videos.length}`));
-bot.action('premium_users', (ctx) => {
-    const premiumUsers = users.filter((u) => u.premium);
-    ctx.reply(`Premium Users: ${premiumUsers.length}`);
+bot.action('total_users', async (ctx) => {
+    const usersCollection = db.collection('users');
+    const totalUsers = await usersCollection.countDocuments();
+    ctx.reply(`Total Users: ${totalUsers}`);
+});
+
+bot.action('total_videos', async (ctx) => {
+    const videosCollection = db.collection('videos');
+    const totalVideos = await videosCollection.countDocuments();
+    ctx.reply(`Total Videos: ${totalVideos}`);
+});
+
+bot.action('premium_users', async (ctx) => {
+    const usersCollection = db.collection('users');
+    const premiumUsers = await usersCollection.countDocuments({ premium: true });
+    ctx.reply(`Premium Users: ${premiumUsers}`);
 });
 
 // Broadcast function
@@ -360,6 +362,8 @@ bot.action('broadcast', (ctx) => {
     ctx.reply('Send the message, video, or photo you want to broadcast.');
     bot.on('message', async (msg) => {
         if (admins.includes(msg.from.id)) {
+            const usersCollection = db.collection('users');
+            const users = await usersCollection.find({}).toArray();
             for (const user of users) {
                 try {
                     if (msg.photo) {
@@ -378,17 +382,54 @@ bot.action('broadcast', (ctx) => {
     });
 });
 
-// Send JSON files to admin channel every 15 minutes
-cron.schedule('*/15 * * * *', () => {
+// Handle video uploads from admins
+bot.on('video', async (ctx) => {
+    const userId = ctx.from.id;
+
+    // Check if the user is an admin
+    if (!admins.includes(userId)) {
+        ctx.reply('You are not authorized to upload videos.');
+        return;
+    }
+
     try {
-        bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: usersFilePath });
-        bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: videosFilePath });
-        bot.telegram.sendDocument(ADMIN_GROUP_ID, { source: usersIdFilePath });
+        // Get the video file ID and other details
+        const videoFileId = ctx.message.video.file_id;
+        const uploaderId = ctx.from.id;
+        const timestamp = new Date().toISOString();
+
+        // Save the video details to the videos collection
+        const videosCollection = db.collection('videos');
+        await videosCollection.insertOne({
+            fileId: videoFileId,
+            uploaderId: uploaderId,
+            timestamp: timestamp,
+        });
+
+        ctx.reply('Video uploaded successfully!');
     } catch (err) {
         logError(err); // Log the error
+        ctx.reply('An error occurred while uploading the video.');
+    }
+});
+
+// Send data to admin channel every 60 minutes
+cron.schedule('*/60 * * * *', async () => {
+    try {
+        const usersCount = await db.collection('users').countDocuments();
+        const videosCount = await db.collection('videos').countDocuments();
+        const usersIdCount = await db.collection('usersId').countDocuments();
+
+        await bot.telegram.sendMessage(ADMIN_GROUP_ID, `Total Users: ${usersCount}\nTotal Videos: ${videosCount}\nTotal User IDs: ${usersIdCount}`);
+    } catch (err) {
+        logError(err);
     }
 });
 
 // Start the bot
-bot.launch();
-console.log('Bot is running...');
+try {
+    bot.launch();
+    console.log('Bot is running...');
+} catch (err) {
+    console.error('Failed to start the bot:', err);
+}
