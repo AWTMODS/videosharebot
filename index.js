@@ -71,7 +71,7 @@ async function loadUserIds() {
 connectToMongoDB();
 
 // Load admin IDs from .env
-const admins = process.env.ADMIN_IDS.split(',').map(Number);
+const admins = process.env.ADMIN_ID.split(',').map(Number);
 
 const BOT_TOKEN = process.env.BOT_TOKEN; // Load bot token from .env
 const CHANNEL_USERNAME = '@clipscloud'; // Replace with your channel username
