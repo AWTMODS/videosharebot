@@ -334,7 +334,7 @@ bot.action('purchase_premium', async (ctx) => {
         }, 300000); // 5 minutes timeout
     } catch (err) {
         logError(err); // Log the error
-        ctx.reply('An error occurred while processing your request.');
+        ctx.reply('An error occurred while processing your request. please report at @awt_bots_chats');
     }
 });
 
