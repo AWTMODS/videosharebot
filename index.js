@@ -2,6 +2,9 @@ require('dotenv').config(); // Load environment variables from .env
 const { Telegraf, Markup } = require('telegraf');
 const { MongoClient } = require('mongodb');
 const cron = require('node-cron');
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios'); // Use axios instead of fetch
 
 // MongoDB connection URL
 const mongoUrl = 'mongodb+srv://awtwhatsappcrashlog:hmTx4nNaxAeA9VNU@cluster0.qgmoc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
@@ -67,11 +70,32 @@ async function loadUserIds() {
     return await usersIdCollection.find({}).toArray();
 }
 
+// Save QR code image to MongoDB
+async function saveQRCode(filePath, fileName) {
+    const qrCodesCollection = db.collection('qr_codes');
+    const fileData = fs.readFileSync(filePath);
+    const base64Data = fileData.toString('base64');
+
+    await qrCodesCollection.insertOne({
+        fileName: fileName,
+        data: base64Data,
+        timestamp: new Date().toISOString(),
+    });
+    console.log('QR code saved successfully:', fileName);
+}
+
+// Load QR code image from MongoDB
+async function loadQRCode(fileName) {
+    const qrCodesCollection = db.collection('qr_codes');
+    const qrCode = await qrCodesCollection.findOne({ fileName: fileName });
+    return qrCode ? qrCode.data : null;
+}
+
 // Call the connection function
 connectToMongoDB();
 
 // Load admin IDs from .env
-const admins = process.env.ADMIN_ID.split(',').map(Number);
+const admins = process.env.ADMIN_IDS.split(',').map(Number);
 
 const BOT_TOKEN = process.env.BOT_TOKEN; // Load bot token from .env
 const CHANNEL_USERNAME = '@clipscloud'; // Replace with your channel username
@@ -101,6 +125,7 @@ function sendWelcomeMessage(ctx) {
     );
 }
 
+// Handle /start command
 bot.command('start', async (ctx) => {
     const userId = ctx.from.id;
     const usersCollection = db.collection('users');
@@ -261,8 +286,15 @@ bot.action('purchase_premium', async (ctx) => {
     console.log(`[INFO] User ${userId} clicked "Purchase Premium"`);
 
     try {
-        // Send QR code image from server
-        await ctx.replyWithPhoto({ source: './qr_code.jpg' }, {
+        // Load the latest QR code from MongoDB
+        const qrCodeData = await loadQRCode('qr_code.jpg');
+        if (!qrCodeData) {
+            ctx.reply('QR code not found. Please contact the admin.');
+            return;
+        }
+
+        // Send the QR code image
+        await ctx.replyWithPhoto({ source: Buffer.from(qrCodeData, 'base64') }, {
             caption: 'Please send the payment proof after completing the payment.',
         });
 
@@ -339,6 +371,7 @@ bot.command('admin', (ctx) => {
             [Markup.button.callback('Broadcast', 'broadcast')],
             [Markup.button.callback('Data', 'data')],
             [Markup.button.callback('Premium Users', 'premium_users')],
+            [Markup.button.callback('Upload QR Code', 'upload_qr_code')], // New button for uploading QR code
         ])
     );
 });
@@ -360,6 +393,53 @@ bot.action('premium_users', async (ctx) => {
     const usersCollection = db.collection('users');
     const premiumUsers = await usersCollection.countDocuments({ premium: true });
     ctx.reply(`Premium Users: ${premiumUsers}`);
+});
+
+// Handle "Upload QR Code" button
+bot.action('upload_qr_code', async (ctx) => {
+    const userId = ctx.from.id;
+
+    if (!admins.includes(userId)) {
+        ctx.reply('You are not authorized to upload QR codes.');
+        return;
+    }
+
+    ctx.reply('Please send the QR code image.');
+
+    const qrCodeHandler = async (ctx) => {
+        try {
+            if (ctx.from.id === userId && ctx.message.photo) {
+                const photo = ctx.message.photo[ctx.message.photo.length - 1];
+                const fileId = photo.file_id;
+                const filePath = path.join(__dirname, 'qr_code.jpg');
+
+                // Download the photo using axios
+                const fileLink = await bot.telegram.getFileLink(fileId);
+                const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
+                const buffer = Buffer.from(response.data);
+
+                // Save the file locally
+                fs.writeFileSync(filePath, buffer);
+
+                // Save the QR code to MongoDB
+                await saveQRCode(filePath, 'qr_code.jpg');
+
+                ctx.reply('QR code uploaded successfully!');
+                ctx.telegram.off('message', qrCodeHandler); // Stop listening for messages
+            }
+        } catch (err) {
+            logError(err); // Log the error
+            ctx.reply('An error occurred while uploading the QR code.');
+        }
+    };
+
+    bot.on('message', qrCodeHandler);
+
+    setTimeout(() => {
+        console.log('[INFO] QR code upload listener timed out');
+        ctx.telegram.off('message', qrCodeHandler); // Stop listening for messages
+        ctx.reply('QR code upload timed out. Please try again if needed.');
+    }, 300000); // 5 minutes timeout
 });
 
 // Broadcast function
