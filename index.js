@@ -101,7 +101,6 @@ function sendWelcomeMessage(ctx) {
     );
 }
 
-// Handle /start command
 bot.command('start', async (ctx) => {
     const userId = ctx.from.id;
     const usersCollection = db.collection('users');
@@ -185,6 +184,8 @@ bot.action('get_videos', async (ctx) => {
     const user = await usersCollection.findOne({ id: userId });
 
     try {
+        console.log('Fetching videos for user:', userId);
+
         // Ensure videoCount and videoIndex are initialized
         if (user.videoCount === null || user.videoCount === undefined) {
             user.videoCount = 0;
@@ -209,6 +210,8 @@ bot.action('get_videos', async (ctx) => {
         }
 
         const videos = await loadVideos();
+        console.log('Total videos fetched:', videos.length);
+
         if (videos.length === 0) {
             ctx.reply('No videos available.');
             return;
@@ -226,6 +229,7 @@ bot.action('get_videos', async (ctx) => {
         // Send the videos
         const videosToSend = videos.slice(user.videoIndex, user.videoIndex + videosToSendCount);
         for (const video of videosToSend) {
+            console.log('Sending video:', video.fileId);
             await ctx.replyWithVideo(video.fileId);
         }
 
@@ -244,6 +248,7 @@ bot.action('get_videos', async (ctx) => {
             ctx.reply('You have reached the end of the video list.');
         }
     } catch (err) {
+        console.error('Error fetching videos:', err);
         logError(err); // Log the error
         ctx.reply('An error occurred while fetching videos.');
     }
