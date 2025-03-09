@@ -318,7 +318,7 @@ bot.action('purchase_premium', async (ctx) => {
                     console.log('[SUCCESS] Payment proof sent to admin group');
                     await ctx.reply('Payment proof received. Admins will verify it shortly.');
 
-                    ctx.telegram.off('message', paymentProofHandler); // Fix: Use ctx.telegram.off
+                    bot.off('message', paymentProofHandler); // Use bot.off instead of ctx.telegram.off
                 }
             } catch (err) {
                 logError(err); // Log the error
@@ -329,7 +329,7 @@ bot.action('purchase_premium', async (ctx) => {
 
         setTimeout(() => {
             console.log('[INFO] Payment proof listener timed out');
-            ctx.telegram.off('message', paymentProofHandler); // Fix: Use ctx.telegram.off
+            bot.off('message', paymentProofHandler); // Use bot.off instead of ctx.telegram.off
             ctx.reply('Payment proof submission timed out. Please try again if needed.');
         }, 300000); // 5 minutes timeout
     } catch (err) {
@@ -425,7 +425,7 @@ bot.action('upload_qr_code', async (ctx) => {
                 await saveQRCode(filePath, 'qr_code.jpg');
 
                 ctx.reply('QR code uploaded successfully!');
-                ctx.telegram.off('message', qrCodeHandler); // Stop listening for messages
+                bot.off('message', qrCodeHandler); // Use bot.off instead of ctx.telegram.off
             }
         } catch (err) {
             logError(err); // Log the error
@@ -437,7 +437,7 @@ bot.action('upload_qr_code', async (ctx) => {
 
     setTimeout(() => {
         console.log('[INFO] QR code upload listener timed out');
-        ctx.telegram.off('message', qrCodeHandler); // Stop listening for messages
+        bot.off('message', qrCodeHandler); // Use bot.off instead of ctx.telegram.off
         ctx.reply('QR code upload timed out. Please try again if needed.');
     }, 300000); // 5 minutes timeout
 });
