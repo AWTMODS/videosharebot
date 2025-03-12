@@ -313,13 +313,13 @@ bot.action('purchase_premium', async (ctx) => {
         // Load the latest QR code from MongoDB
         const qrCodeData = await loadQRCode('qr_code.jpg');
         if (!qrCodeData) {
-            ctx.reply('QR code not found. Please contact the admin.');
+            ctx.reply('QR code not found. Please contact the admin. @copyrightadmin');
             return;
         }
 
         // Send the QR code image
         await ctx.replyWithPhoto({ source: Buffer.from(qrCodeData, 'base64') }, {
-            caption: 'Please send the payment proof after completing the payment.',
+            caption: 'Please send the payment proof after completing the payment.or contact @copyrightadmin',
         });
 
         const paymentProofHandler = async (ctx) => {
