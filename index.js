@@ -338,7 +338,6 @@ bot.action('purchase_premium', async (ctx) => {
                             inline_keyboard: [[{ text: 'Verify', callback_data: `verify_${userId}` }]],
                         },
                     });
-
                     console.log('[SUCCESS] Payment proof sent to admin group');
                     await ctx.reply('Payment proof received. Admins will verify it shortly.');
 
