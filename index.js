@@ -218,7 +218,6 @@ bot.action('check_join', async (ctx) => {
     }
 });
 
-// Handle "Get Videos" button
 bot.action('get_videos', async (ctx) => {
     try {
         const userId = ctx.from.id;
@@ -269,7 +268,20 @@ bot.action('get_videos', async (ctx) => {
 
         const videosToSend = videos.slice(user.videoIndex, user.videoIndex + videosToSendCount);
         for (const video of videosToSend) {
-            await ctx.replyWithVideo(video.fileId);
+            try {
+                // Attempt to send the video
+                await ctx.replyWithVideo(video.fileId);
+            } catch (err) {
+                console.error('Error sending video:', err);
+                logError(err, ctx); // Log the error
+
+                // Notify the user about the invalid video
+                await ctx.reply('Sorry, this video is unavailable. Skipping to the next one.');
+
+                // Optionally, remove the invalid video from the database
+                const videosCollection = db.collection('videos');
+                await videosCollection.deleteOne({ fileId: video.fileId });
+            }
         }
 
         user.videoIndex += videosToSendCount;
@@ -521,7 +533,6 @@ bot.action('broadcast', (ctx) => {
     }
 });
 
-// Handle video uploads from admins
 bot.on('video', async (ctx) => {
     try {
         const userId = ctx.from.id;
@@ -536,6 +547,15 @@ bot.on('video', async (ctx) => {
         const videoFileId = ctx.message.video.file_id;
         const uploaderId = ctx.from.id;
         const timestamp = new Date().toISOString();
+
+        // Validate the file_id by attempting to send the video
+        try {
+            await ctx.replyWithVideo(videoFileId);
+        } catch (err) {
+            console.error('Invalid file_id:', err);
+            await ctx.reply('The video file is invalid. Please upload a valid video.');
+            return;
+        }
 
         // Save the video details to the videos collection
         const videosCollection = db.collection('videos');
