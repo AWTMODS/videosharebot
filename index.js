@@ -25,13 +25,17 @@ async function connectToMongoDB() {
 }
 
 // Function to log errors to MongoDB
-async function logError(error) {
+async function logError(error, ctx = null) {
     const errorsCollection = db.collection('errors');
     const timestamp = new Date().toISOString();
     const errorMessage = `[${timestamp}] ${error.stack || error}`;
+    const context = ctx ? {
+        userId: ctx.from.id,
+        command: ctx.message?.text || 'N/A',
+    } : {};
 
-    await errorsCollection.insertOne({ timestamp, error: errorMessage });
-    console.error('Error logged:', errorMessage);
+    await errorsCollection.insertOne({ timestamp, error: errorMessage, context });
+    console.error('Error logged:', errorMessage, context);
 }
 
 // Save user data to MongoDB
@@ -127,44 +131,14 @@ function sendWelcomeMessage(ctx) {
 
 // Handle /start command
 bot.command('start', async (ctx) => {
-    const userId = ctx.from.id;
-    const usersCollection = db.collection('users');
-    const user = await usersCollection.findOne({ id: userId });
-
-    if (!user) {
-        // Initialize user with default values
-        const newUser = {
-            id: userId,
-            username: ctx.from.username || '',
-            name: ctx.from.first_name || '',
-            joined: false,
-            premium: false,
-            videoCount: 0,
-            lastVideoDate: null,
-            videoIndex: 0,
-            welcomed: false,
-        };
-        await usersCollection.insertOne(newUser);
-
-        // Save user ID to usersId collection
-        await saveUserId(userId);
-    }
-
-    sendWelcomeMessage(ctx);
-});
-
-// Handle "I Have Joined" button
-bot.action('check_join', async (ctx) => {
-    const userId = ctx.from.id;
-    const isMember = await checkUserInChannel(userId);
-
-    if (isMember) {
+    try {
+        const userId = ctx.from.id;
         const usersCollection = db.collection('users');
-        let user = await usersCollection.findOne({ id: userId });
+        const user = await usersCollection.findOne({ id: userId });
 
-        // If the user doesn't exist, initialize them with default values
         if (!user) {
-            user = {
+            // Initialize user with default values
+            const newUser = {
                 id: userId,
                 username: ctx.from.username || '',
                 name: ctx.from.first_name || '',
@@ -175,43 +149,88 @@ bot.action('check_join', async (ctx) => {
                 videoIndex: 0,
                 welcomed: false,
             };
-            await usersCollection.insertOne(user);
+            await usersCollection.insertOne(newUser);
+
+            // Save user ID to usersId collection
+            await saveUserId(userId);
         }
 
-        user.joined = true;
-        await saveUser(user);
+        sendWelcomeMessage(ctx);
+    } catch (err) {
+        console.error('Error in /start command:', err);
+        logError(err, ctx); // Log the error with context
+        ctx.reply('An error occurred. Please try again later.');
+    }
+});
 
-        ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // Remove buttons
-        ctx.reply('Welcome! You can now use the bot.');
+// Handle "I Have Joined" button
+bot.action('check_join', async (ctx) => {
+    try {
+        const userId = ctx.from.id;
+        const isMember = await checkUserInChannel(userId);
 
-        if (!user.welcomed) {
-            const welcomeMessage = await ctx.reply('This is your first time using the bot. Enjoy!');
-            user.welcomed = true;
+        if (isMember) {
+            const usersCollection = db.collection('users');
+            let user = await usersCollection.findOne({ id: userId });
+
+            // If the user doesn't exist, initialize them with default values
+            if (!user) {
+                user = {
+                    id: userId,
+                    username: ctx.from.username || '',
+                    name: ctx.from.first_name || '',
+                    joined: false,
+                    premium: false,
+                    videoCount: 0,
+                    lastVideoDate: null,
+                    videoIndex: 0,
+                    welcomed: false,
+                };
+                await usersCollection.insertOne(user);
+            }
+
+            user.joined = true;
             await saveUser(user);
 
-            // Delete welcome message after 30 seconds
-            setTimeout(() => ctx.deleteMessage(welcomeMessage.message_id), 30000);
-        }
+            ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // Remove buttons
+            ctx.reply('Welcome! You can now use the bot.');
 
-        ctx.reply(
-            'Click below to get videos:',
-            Markup.inlineKeyboard([[Markup.button.callback('Get Videos', 'get_videos')]])
-        );
-    } else {
-        ctx.answerCbQuery('You have not joined the channel yet. Please join and try again.');
+            if (!user.welcomed) {
+                const welcomeMessage = await ctx.reply('This is your first time using the bot. Enjoy!');
+                user.welcomed = true;
+                await saveUser(user);
+
+                // Delete welcome message after 30 seconds
+                setTimeout(() => ctx.deleteMessage(welcomeMessage.message_id), 30000);
+            }
+
+            ctx.reply(
+                'Click below to get videos:',
+                Markup.inlineKeyboard([[Markup.button.callback('Get Videos', 'get_videos')]])
+            );
+        } else {
+            ctx.answerCbQuery('You have not joined the channel yet. Please join and try again.');
+        }
+    } catch (err) {
+        console.error('Error in check_join action:', err);
+        logError(err, ctx); // Log the error with context
+        ctx.reply('An error occurred. Please try again later.');
     }
 });
 
 // Handle "Get Videos" button
 bot.action('get_videos', async (ctx) => {
-    const userId = ctx.from.id;
-    const usersCollection = db.collection('users');
-    const user = await usersCollection.findOne({ id: userId });
-
     try {
-        console.log('Fetching videos for user:', userId);
+        const userId = ctx.from.id;
+        const usersCollection = db.collection('users');
+        let user = await usersCollection.findOne({ id: userId });
 
-        // Ensure videoCount and videoIndex are initialized
+        if (!user) {
+            ctx.reply('User not found. Please use /start to initialize your account.');
+            return;
+        }
+
+        // Initialize videoCount and videoIndex if not set
         if (user.videoCount === null || user.videoCount === undefined) {
             user.videoCount = 0;
         }
@@ -235,35 +254,28 @@ bot.action('get_videos', async (ctx) => {
         }
 
         const videos = await loadVideos();
-        console.log('Total videos fetched:', videos.length);
-
         if (videos.length === 0) {
             ctx.reply('No videos available.');
             return;
         }
 
-        // Calculate the number of videos to send (maximum 5)
         const remainingVideos = videos.length - user.videoIndex;
-        const videosToSendCount = Math.min(5, remainingVideos); // Send up to 5 videos
+        const videosToSendCount = Math.min(5, remainingVideos);
 
         if (videosToSendCount <= 0) {
             ctx.reply('No more videos available.');
             return;
         }
 
-        // Send the videos
         const videosToSend = videos.slice(user.videoIndex, user.videoIndex + videosToSendCount);
         for (const video of videosToSend) {
-            console.log('Sending video:', video.fileId);
             await ctx.replyWithVideo(video.fileId);
         }
 
-        // Update user's video index and count
         user.videoIndex += videosToSendCount;
         user.videoCount += videosToSendCount;
         await saveUser(user);
 
-        // Show "Get Videos" button again if there are more videos
         if (user.videoIndex < videos.length) {
             ctx.reply(
                 'Click below to get more videos:',
@@ -274,18 +286,18 @@ bot.action('get_videos', async (ctx) => {
         }
     } catch (err) {
         console.error('Error fetching videos:', err);
-        logError(err); // Log the error
+        logError(err, ctx); // Log the error with context
         ctx.reply('An error occurred while fetching videos.');
     }
 });
 
 // Handle "Purchase Premium" button
 bot.action('purchase_premium', async (ctx) => {
-    const userId = ctx.from.id;
-
-    console.log(`[INFO] User ${userId} clicked "Purchase Premium"`);
-
     try {
+        const userId = ctx.from.id;
+
+        console.log(`[INFO] User ${userId} clicked "Purchase Premium"`);
+
         // Load the latest QR code from MongoDB
         const qrCodeData = await loadQRCode('qr_code.jpg');
         if (!qrCodeData) {
@@ -334,24 +346,30 @@ bot.action('purchase_premium', async (ctx) => {
         }, 300000); // 5 minutes timeout
     } catch (err) {
         logError(err); // Log the error
-        ctx.reply('An error occurred while processing your request. please report at @awt_bots_chats');
+        ctx.reply('An error occurred while processing your request. Please report at @awt_bots_chats');
     }
 });
 
 // Handle "Verify" button in admin group
 bot.action(/verify_(\d+)/, async (ctx) => {
-    const userId = parseInt(ctx.match[1], 10);
-    const usersCollection = db.collection('users');
-    const user = await usersCollection.findOne({ id: userId });
+    try {
+        const userId = parseInt(ctx.match[1], 10);
+        const usersCollection = db.collection('users');
+        const user = await usersCollection.findOne({ id: userId });
 
-    if (user) {
-        user.premium = true;
-        await saveUser(user);
+        if (user) {
+            user.premium = true;
+            await saveUser(user);
 
-        await ctx.reply('Payment verified. User is now premium.');
-        await bot.telegram.sendMessage(userId, 'Thank you for purchasing premium!');
-    } else {
-        await ctx.reply('User not found in the database.');
+            await ctx.reply('Payment verified. User is now premium.');
+            await bot.telegram.sendMessage(userId, 'Thank you for purchasing premium!');
+        } else {
+            await ctx.reply('User not found in the database.');
+        }
+    } catch (err) {
+        console.error('Error in verify action:', err);
+        logError(err, ctx); // Log the error with context
+        ctx.reply('An error occurred. Please try again later.');
     }
 });
 
@@ -378,106 +396,142 @@ bot.command('admin', (ctx) => {
 
 // Handle admin buttons
 bot.action('total_users', async (ctx) => {
-    const usersCollection = db.collection('users');
-    const totalUsers = await usersCollection.countDocuments();
-    ctx.reply(`Total Users: ${totalUsers}`);
+    try {
+        const usersCollection = db.collection('users');
+        const totalUsers = await usersCollection.countDocuments();
+        ctx.reply(`Total Users: ${totalUsers}`);
+    } catch (err) {
+        console.error('Error fetching total users:', err);
+        logError(err, ctx); // Log the error with context
+        ctx.reply('An error occurred. Please try again later.');
+    }
 });
 
 bot.action('total_videos', async (ctx) => {
-    const videosCollection = db.collection('videos');
-    const totalVideos = await videosCollection.countDocuments();
-    ctx.reply(`Total Videos: ${totalVideos}`);
+    try {
+        const videosCollection = db.collection('videos');
+        const totalVideos = await videosCollection.countDocuments();
+        ctx.reply(`Total Videos: ${totalVideos}`);
+    } catch (err) {
+        console.error('Error fetching total videos:', err);
+        logError(err, ctx); // Log the error with context
+        ctx.reply('An error occurred. Please try again later.');
+    }
 });
 
 bot.action('premium_users', async (ctx) => {
-    const usersCollection = db.collection('users');
-    const premiumUsers = await usersCollection.countDocuments({ premium: true });
-    ctx.reply(`Premium Users: ${premiumUsers}`);
+    try {
+        const usersCollection = db.collection('users');
+        const premiumUsers = await usersCollection.countDocuments({ premium: true });
+        ctx.reply(`Premium Users: ${premiumUsers}`);
+    } catch (err) {
+        console.error('Error fetching premium users:', err);
+        logError(err, ctx); // Log the error with context
+        ctx.reply('An error occurred. Please try again later.');
+    }
 });
 
 // Handle "Upload QR Code" button
 bot.action('upload_qr_code', async (ctx) => {
-    const userId = ctx.from.id;
+    try {
+        const userId = ctx.from.id;
 
-    if (!admins.includes(userId)) {
-        ctx.reply('You are not authorized to upload QR codes.');
-        return;
-    }
-
-    ctx.reply('Please send the QR code image.');
-
-    const qrCodeHandler = async (ctx) => {
-        try {
-            if (ctx.from.id === userId && ctx.message.photo) {
-                const photo = ctx.message.photo[ctx.message.photo.length - 1];
-                const fileId = photo.file_id;
-                const filePath = path.join(__dirname, 'qr_code.jpg');
-
-                // Download the photo using axios
-                const fileLink = await bot.telegram.getFileLink(fileId);
-                const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
-                const buffer = Buffer.from(response.data);
-
-                // Save the file locally
-                fs.writeFileSync(filePath, buffer);
-
-                // Save the QR code to MongoDB
-                await saveQRCode(filePath, 'qr_code.jpg');
-
-                ctx.reply('QR code uploaded successfully!');
-                bot.off('message', qrCodeHandler); // Use bot.off instead of ctx.telegram.off
-            }
-        } catch (err) {
-            logError(err); // Log the error
-            ctx.reply('An error occurred while uploading the QR code.');
+        if (!admins.includes(userId)) {
+            ctx.reply('You are not authorized to upload QR codes.');
+            return;
         }
-    };
 
-    bot.on('message', qrCodeHandler);
+        ctx.reply('Please send the QR code image.');
 
-    setTimeout(() => {
-        console.log('[INFO] QR code upload listener timed out');
-        bot.off('message', qrCodeHandler); // Use bot.off instead of ctx.telegram.off
-        ctx.reply('QR code upload timed out. Please try again if needed.');
-    }, 300000); // 5 minutes timeout
+        const qrCodeHandler = async (ctx) => {
+            try {
+                if (ctx.from.id === userId && ctx.message.photo) {
+                    const photo = ctx.message.photo[ctx.message.photo.length - 1];
+                    const fileId = photo.file_id;
+                    const filePath = path.join(__dirname, 'qr_code.jpg');
+
+                    // Download the photo using axios
+                    const fileLink = await bot.telegram.getFileLink(fileId);
+                    const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
+                    const buffer = Buffer.from(response.data);
+
+                    // Save the file locally
+                    fs.writeFileSync(filePath, buffer);
+
+                    // Save the QR code to MongoDB
+                    await saveQRCode(filePath, 'qr_code.jpg');
+
+                    ctx.reply('QR code uploaded successfully!');
+                    bot.off('message', qrCodeHandler); // Use bot.off instead of ctx.telegram.off
+                }
+            } catch (err) {
+                logError(err); // Log the error
+                ctx.reply('An error occurred while uploading the QR code.');
+            }
+        };
+
+        bot.on('message', qrCodeHandler);
+
+        setTimeout(() => {
+            console.log('[INFO] QR code upload listener timed out');
+            bot.off('message', qrCodeHandler); // Use bot.off instead of ctx.telegram.off
+            ctx.reply('QR code upload timed out. Please try again if needed.');
+        }, 300000); // 5 minutes timeout
+    } catch (err) {
+        console.error('Error in upload_qr_code action:', err);
+        logError(err, ctx); // Log the error with context
+        ctx.reply('An error occurred. Please try again later.');
+    }
 });
 
 // Broadcast function
 bot.action('broadcast', (ctx) => {
-    ctx.reply('Send the message, video, or photo you want to broadcast.');
-    bot.on('message', async (msg) => {
-        if (admins.includes(msg.from.id)) {
-            const usersCollection = db.collection('users');
-            const users = await usersCollection.find({}).toArray();
-            for (const user of users) {
-                try {
-                    if (msg.photo) {
-                        await bot.telegram.sendPhoto(user.id, msg.photo[0].file_id, { caption: msg.caption });
-                    } else if (msg.video) {
-                        await bot.telegram.sendVideo(user.id, msg.video.file_id, { caption: msg.caption });
-                    } else {
-                        await bot.telegram.sendMessage(user.id, msg.text);
+    try {
+        ctx.reply('Send the message, video, or photo you want to broadcast.');
+        bot.on('message', async (msg) => {
+            if (admins.includes(msg.from.id)) {
+                const usersCollection = db.collection('users');
+                const users = await usersCollection.find({}).toArray();
+                let successCount = 0;
+                let failCount = 0;
+
+                for (const user of users) {
+                    try {
+                        if (msg.photo) {
+                            await bot.telegram.sendPhoto(user.id, msg.photo[0].file_id, { caption: msg.caption });
+                        } else if (msg.video) {
+                            await bot.telegram.sendVideo(user.id, msg.video.file_id, { caption: msg.caption });
+                        } else {
+                            await bot.telegram.sendMessage(user.id, msg.text);
+                        }
+                        successCount++;
+                    } catch (err) {
+                        failCount++;
+                        logError(err); // Log the error
                     }
-                } catch (err) {
-                    logError(err); // Log the error
                 }
+
+                ctx.reply(`Broadcast completed. Success: ${successCount}, Failed: ${failCount}`);
             }
-            ctx.reply('Broadcast completed.');
-        }
-    });
+        });
+    } catch (err) {
+        console.error('Error in broadcast action:', err);
+        logError(err, ctx); // Log the error with context
+        ctx.reply('An error occurred. Please try again later.');
+    }
 });
 
 // Handle video uploads from admins
 bot.on('video', async (ctx) => {
-    const userId = ctx.from.id;
-
-    // Check if the user is an admin
-    if (!admins.includes(userId)) {
-        ctx.reply('You are not authorized to upload videos.');
-        return;
-    }
-
     try {
+        const userId = ctx.from.id;
+
+        // Check if the user is an admin
+        if (!admins.includes(userId)) {
+            ctx.reply('You are not authorized to upload videos.');
+            return;
+        }
+
         // Get the video file ID and other details
         const videoFileId = ctx.message.video.file_id;
         const uploaderId = ctx.from.id;
@@ -493,7 +547,8 @@ bot.on('video', async (ctx) => {
 
         ctx.reply('Video uploaded successfully!');
     } catch (err) {
-        logError(err); // Log the error
+        console.error('Error in video upload:', err);
+        logError(err, ctx); // Log the error with context
         ctx.reply('An error occurred while uploading the video.');
     }
 });
@@ -507,7 +562,8 @@ cron.schedule('*/60 * * * *', async () => {
 
         await bot.telegram.sendMessage(ADMIN_GROUP_ID, `Total Users: ${usersCount}\nTotal Videos: ${videosCount}\nTotal User IDs: ${usersIdCount}`);
     } catch (err) {
-        logError(err);
+        console.error('Error in cron job:', err);
+        logError(err); // Log the error
     }
 });
 
@@ -518,3 +574,16 @@ try {
 } catch (err) {
     console.error('Failed to start the bot:', err);
 }
+
+// Graceful shutdown
+process.once('SIGINT', () => {
+    console.log('Shutting down gracefully...');
+    bot.stop('SIGINT');
+    process.exit();
+});
+
+process.once('SIGTERM', () => {
+    console.log('Shutting down gracefully...');
+    bot.stop('SIGTERM');
+    process.exit();
+});
