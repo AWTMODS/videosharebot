@@ -26,6 +26,10 @@ async function connectToMongoDB() {
 
 // Function to log errors to MongoDB
 async function logError(error, ctx = null) {
+    if (!db) {
+        console.error('Database not connected. Cannot log error.');
+        return;
+    }
     const errorsCollection = db.collection('errors');
     const timestamp = new Date().toISOString();
     const errorMessage = `[${timestamp}] ${error.stack || error}`;
@@ -40,42 +44,70 @@ async function logError(error, ctx = null) {
 
 // Save user data to MongoDB
 async function saveUser(user) {
+    if (!db) {
+        console.error('Database not connected. Cannot save user.');
+        return;
+    }
     const usersCollection = db.collection('users');
     await usersCollection.updateOne({ id: user.id }, { $set: user }, { upsert: true });
 }
 
 // Load all users from MongoDB
 async function loadUsers() {
+    if (!db) {
+        console.error('Database not connected. Cannot load users.');
+        return [];
+    }
     const usersCollection = db.collection('users');
     return await usersCollection.find({}).toArray();
 }
 
 // Save video data to MongoDB
 async function saveVideo(video) {
+    if (!db) {
+        console.error('Database not connected. Cannot save video.');
+        return;
+    }
     const videosCollection = db.collection('videos');
     await videosCollection.insertOne(video);
 }
 
 // Load all videos from MongoDB
 async function loadVideos() {
+    if (!db) {
+        console.error('Database not connected. Cannot load videos.');
+        return [];
+    }
     const videosCollection = db.collection('videos');
     return await videosCollection.find({}).toArray();
 }
 
 // Save user ID to MongoDB
 async function saveUserId(userId) {
+    if (!db) {
+        console.error('Database not connected. Cannot save user ID.');
+        return;
+    }
     const usersIdCollection = db.collection('usersId');
     await usersIdCollection.updateOne({ userId }, { $set: { userId } }, { upsert: true });
 }
 
 // Load all user IDs from MongoDB
 async function loadUserIds() {
+    if (!db) {
+        console.error('Database not connected. Cannot load user IDs.');
+        return [];
+    }
     const usersIdCollection = db.collection('usersId');
     return await usersIdCollection.find({}).toArray();
 }
 
 // Save QR code image to MongoDB
 async function saveQRCode(filePath, fileName) {
+    if (!db) {
+        console.error('Database not connected. Cannot save QR code.');
+        return;
+    }
     const qrCodesCollection = db.collection('qr_codes');
     const fileData = fs.readFileSync(filePath);
     const base64Data = fileData.toString('base64');
@@ -90,13 +122,14 @@ async function saveQRCode(filePath, fileName) {
 
 // Load QR code image from MongoDB
 async function loadQRCode(fileName) {
+    if (!db) {
+        console.error('Database not connected. Cannot load QR code.');
+        return null;
+    }
     const qrCodesCollection = db.collection('qr_codes');
     const qrCode = await qrCodesCollection.findOne({ fileName: fileName });
     return qrCode ? qrCode.data : null;
 }
-
-// Call the connection function
-connectToMongoDB();
 
 // Load admin IDs from .env
 const admins = process.env.ADMIN_IDS.split(',').map(Number);
@@ -132,6 +165,11 @@ function sendWelcomeMessage(ctx) {
 // Handle /start command
 bot.command('start', async (ctx) => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot process /start command.');
+            return ctx.reply('Database connection error. Please try again later.');
+        }
+
         const userId = ctx.from.id;
         const usersCollection = db.collection('users');
         const user = await usersCollection.findOne({ id: userId });
@@ -166,6 +204,11 @@ bot.command('start', async (ctx) => {
 // Handle "I Have Joined" button
 bot.action('check_join', async (ctx) => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot process check_join action.');
+            return ctx.reply('Database connection error. Please try again later.');
+        }
+
         const userId = ctx.from.id;
         const isMember = await checkUserInChannel(userId);
 
@@ -218,8 +261,14 @@ bot.action('check_join', async (ctx) => {
     }
 });
 
+// Handle "Get Videos" button
 bot.action('get_videos', async (ctx) => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot process get_videos action.');
+            return ctx.reply('Database connection error. Please try again later.');
+        }
+
         const userId = ctx.from.id;
         const usersCollection = db.collection('users');
         let user = await usersCollection.findOne({ id: userId });
@@ -272,15 +321,19 @@ bot.action('get_videos', async (ctx) => {
                 // Attempt to send the video
                 await ctx.replyWithVideo(video.fileId);
             } catch (err) {
-                console.error('Error sending video:', err);
-                logError(err, ctx); // Log the error
+                if (err.response && err.response.error_code === 403) {
+                    console.log(`User ${ctx.from.id} has blocked the bot. Skipping video.`);
+                } else {
+                    console.error('Error sending video:', err);
+                    logError(err, ctx); // Log the error
 
-                // Notify the user about the invalid video
-                await ctx.reply('Sorry, this video is unavailable. Skipping to the next one.');
+                    // Notify the user about the invalid video
+                    await ctx.reply('Sorry, this video is unavailable. Skipping to the next one.');
 
-                // Optionally, remove the invalid video from the database
-                const videosCollection = db.collection('videos');
-                await videosCollection.deleteOne({ fileId: video.fileId });
+                    // Optionally, remove the invalid video from the database
+                    const videosCollection = db.collection('videos');
+                    await videosCollection.deleteOne({ fileId: video.fileId });
+                }
             }
         }
 
@@ -306,6 +359,11 @@ bot.action('get_videos', async (ctx) => {
 // Handle "Purchase Premium" button
 bot.action('purchase_premium', async (ctx) => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot process purchase_premium action.');
+            return ctx.reply('Database connection error. Please try again later.');
+        }
+
         const userId = ctx.from.id;
 
         console.log(`[INFO] User ${userId} clicked "Purchase Premium"`);
@@ -313,13 +371,13 @@ bot.action('purchase_premium', async (ctx) => {
         // Load the latest QR code from MongoDB
         const qrCodeData = await loadQRCode('qr_code.jpg');
         if (!qrCodeData) {
-            ctx.reply('QR code not found. Please contact the admin. @copyrightadmin');
+            ctx.reply('QR code not found. Please contact the admin.');
             return;
         }
 
         // Send the QR code image
         await ctx.replyWithPhoto({ source: Buffer.from(qrCodeData, 'base64') }, {
-            caption: 'Please send the payment proof after completing the payment.or contact @copyrightadmin',
+            caption: 'Please send the payment proof after completing the payment.',
         });
 
         const paymentProofHandler = async (ctx) => {
@@ -338,6 +396,7 @@ bot.action('purchase_premium', async (ctx) => {
                             inline_keyboard: [[{ text: 'Verify', callback_data: `verify_${userId}` }]],
                         },
                     });
+
                     console.log('[SUCCESS] Payment proof sent to admin group');
                     await ctx.reply('Payment proof received. Admins will verify it shortly.');
 
@@ -364,6 +423,11 @@ bot.action('purchase_premium', async (ctx) => {
 // Handle "Verify" button in admin group
 bot.action(/verify_(\d+)/, async (ctx) => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot process verify action.');
+            return ctx.reply('Database connection error. Please try again later.');
+        }
+
         const userId = parseInt(ctx.match[1], 10);
         const usersCollection = db.collection('users');
         const user = await usersCollection.findOne({ id: userId });
@@ -408,6 +472,11 @@ bot.command('admin', (ctx) => {
 // Handle admin buttons
 bot.action('total_users', async (ctx) => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot process total_users action.');
+            return ctx.reply('Database connection error. Please try again later.');
+        }
+
         const usersCollection = db.collection('users');
         const totalUsers = await usersCollection.countDocuments();
         ctx.reply(`Total Users: ${totalUsers}`);
@@ -420,6 +489,11 @@ bot.action('total_users', async (ctx) => {
 
 bot.action('total_videos', async (ctx) => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot process total_videos action.');
+            return ctx.reply('Database connection error. Please try again later.');
+        }
+
         const videosCollection = db.collection('videos');
         const totalVideos = await videosCollection.countDocuments();
         ctx.reply(`Total Videos: ${totalVideos}`);
@@ -432,6 +506,11 @@ bot.action('total_videos', async (ctx) => {
 
 bot.action('premium_users', async (ctx) => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot process premium_users action.');
+            return ctx.reply('Database connection error. Please try again later.');
+        }
+
         const usersCollection = db.collection('users');
         const premiumUsers = await usersCollection.countDocuments({ premium: true });
         ctx.reply(`Premium Users: ${premiumUsers}`);
@@ -445,6 +524,11 @@ bot.action('premium_users', async (ctx) => {
 // Handle "Upload QR Code" button
 bot.action('upload_qr_code', async (ctx) => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot process upload_qr_code action.');
+            return ctx.reply('Database connection error. Please try again later.');
+        }
+
         const userId = ctx.from.id;
 
         if (!admins.includes(userId)) {
@@ -496,8 +580,14 @@ bot.action('upload_qr_code', async (ctx) => {
 });
 
 // Broadcast function
+// Broadcast function
 bot.action('broadcast', (ctx) => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot process broadcast action.');
+            return ctx.reply('Database connection error. Please try again later.');
+        }
+
         ctx.reply('Send the message, video, or photo you want to broadcast.');
         bot.on('message', async (msg) => {
             if (admins.includes(msg.from.id)) {
@@ -517,8 +607,13 @@ bot.action('broadcast', (ctx) => {
                         }
                         successCount++;
                     } catch (err) {
+                        if (err.response && err.response.error_code === 403) {
+                            console.log(`User ${user.id} has blocked the bot. Skipping message.`);
+                        } else {
+                            console.error('Error sending message to user:', err);
+                            logError(err); // Log other errors
+                        }
                         failCount++;
-                        logError(err); // Log the error
                     }
                 }
 
@@ -534,6 +629,11 @@ bot.action('broadcast', (ctx) => {
 
 bot.on('video', async (ctx) => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot process video upload.');
+            return ctx.reply('Database connection error. Please try again later.');
+        }
+
         const userId = ctx.from.id;
 
         // Check if the user is an admin
@@ -575,6 +675,11 @@ bot.on('video', async (ctx) => {
 // Send data to admin channel every 60 minutes
 cron.schedule('*/60 * * * *', async () => {
     try {
+        if (!db) {
+            console.error('Database not connected. Cannot send data to admin channel.');
+            return;
+        }
+
         const usersCount = await db.collection('users').countDocuments();
         const videosCount = await db.collection('videos').countDocuments();
         const usersIdCount = await db.collection('usersId').countDocuments();
@@ -586,13 +691,19 @@ cron.schedule('*/60 * * * *', async () => {
     }
 });
 
-// Start the bot
-try {
-    bot.launch();
-    console.log('Bot is running...');
-} catch (err) {
-    console.error('Failed to start the bot:', err);
+// Start the bot after connecting to MongoDB
+async function startBot() {
+    try {
+        await connectToMongoDB(); // Wait for MongoDB connection
+        bot.launch();
+        console.log('Bot is running...');
+    } catch (err) {
+        console.error('Failed to start the bot:', err);
+    }
 }
+
+// Start the bot
+startBot();
 
 // Graceful shutdown
 process.once('SIGINT', () => {
